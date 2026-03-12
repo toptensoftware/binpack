@@ -1,0 +1,19 @@
+{
+  "name": "@toptensoftware/binpack",
+  "description": "Node library for generating packed binary data from JSON like objects",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "contributors": [
+    {
+      "name": "Brad Robinson",
+      "email": "contact@toptensoftware.com"
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/toptensoftware/irlib"
+  },
+  "author": "Topten Software",
+  "license": "MIT"
+}
