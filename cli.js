@@ -129,12 +129,28 @@ async function main() {
             });
             console.log("\nUnpack output:");
             showArgs({
-                "<packedfile>.unpack.json": "Unpacked JSON data",
+                "stdout":       "Unpacked JSON data (default, when --out not specified)",
             });
             process.exit(0);
         } else {
             throw new Error(`Unknown option: --${args.name}`);
         }
+    }
+
+    // Header-only mode: --header with a type file but no data/bin file to pack.
+    // Usage: binpack --header:out.h [typefile]
+    if (headerFile && positional.length <= 1 && (positional.length === 0 || path.extname(positional[0]).toLowerCase() !== ".bin")) {
+        await loadTypeDefs(positional[0] ?? null);
+        if (use64bit) enable64BitMode(true);
+        let header;
+        try {
+            header = formatTypes();
+        } finally {
+            if (use64bit) enable64BitMode(false);
+        }
+        fs.writeFileSync(headerFile, header);
+        console.log(`Written: ${headerFile}`);
+        return;
     }
 
     if (positional.length === 0) {
@@ -347,11 +363,12 @@ async function doUnpack(binFile, typeFile, outFile, raw, base, use64bit, noUnpac
     const jsonOut = JSON.stringify(result, (_, v) =>
         typeof v === 'bigint' ? v.toString() : v, 2);
 
-    const defaultOut = binFile.replace(/\.bin$/i, "") + ".unpack.json";
-    const destFile   = outFile ?? defaultOut;
-
-    fs.writeFileSync(destFile, jsonOut + "\n");
-    console.log(`Written: ${destFile}`);
+    if (outFile) {
+        fs.writeFileSync(outFile, jsonOut + "\n");
+        console.log(`Written: ${outFile}`);
+    } else {
+        process.stdout.write(jsonOut + "\n");
+    }
 }
 
 main().catch(err => {
