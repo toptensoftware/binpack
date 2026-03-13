@@ -739,7 +739,9 @@ export function unpack(type, buf, offset = 0)
 export function formatTypes()
 {
     let buf = "#pragma once\n\n";
+    buf += `#include <stdint.h>\n\n`;
 
+    buf += "// Forward declarations\n";
     for (let t of typeMap.values())
     {
         if (!t.fields)
@@ -747,6 +749,16 @@ export function formatTypes()
 
         // Ensure the type is fully laid out (may not have been packed yet)
         findType(t);
+
+        buf += `typedef struct __attribute__((packed)) ${t.name} ${t.name}\n`;
+    }
+
+    buf += `\n\n`;
+
+    for (let t of typeMap.values())
+    {
+        if (!t.fields)
+            continue;
 
         buf += `// ${t.name}\n`;
         buf += `typedef struct __attribute__((packed)) \n`;
