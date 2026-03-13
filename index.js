@@ -5,7 +5,7 @@ let buildInTypes =
         cname: "uint32_t",
         length: 4,
         meta: true,
-        cfieldprefix: "len_",
+        cfieldsuffix: "_count",
         pack: (ctx, v) => ctx.buf.writeUInt32LE(v?.length ?? 0, ctx.offset),
         unpack: (ctx) => ctx.buf.readUInt32LE(ctx.offset),
     },
@@ -172,7 +172,7 @@ export function enable64BitMode(enabled)
     {
         if (!t.fields) continue;
         delete t.length;
-        delete t.baseType;
+        if (t._baseType !== undefined) t.baseType = t._baseType; else delete t.baseType;
         delete t._computing;
         for (let field of t.fields)
         {
@@ -202,7 +202,7 @@ export function findType(type)
             return {
                 reference: t,
                 length: ptrSize,
-                cname: t.cname + "*",
+                cname: (t.cname ?? t.name) + "*",
             }
         }
 
@@ -211,7 +211,7 @@ export function findType(type)
             let t = findType(type.substring(0, type.length - 2));
             return {
                 array: t,
-                cname: t.cname,
+                cname: t.cname ?? t.name,
             }
         }
 
@@ -224,7 +224,7 @@ export function findType(type)
                 array: t,
                 fixedLength,
                 length: fixedLength * t.length,
-                cname: t.cname,
+                cname: t.cname ?? t.name,
             }
         }
 
@@ -254,11 +254,15 @@ export function findType(type)
                 hasLengthMeta.add(field.name);
         }
 
-        // Derived types: lay out own fields after the base type
+        // Derived types: lay out own fields after the base type.
+        // Support both `extends: "TypeName"` and `baseType: "TypeName"` spellings.
+        // Save the original name in _baseType so enable64BitMode() can restore it.
         let startOffset = 0;
-        if (type.extends)
+        const baseTypeName = type.extends ?? (typeof type.baseType === 'string' ? type.baseType : undefined);
+        if (baseTypeName)
         {
-            type.baseType = findType(type.extends);
+            if (type._baseType === undefined) type._baseType = baseTypeName;
+            type.baseType = findType(baseTypeName);
             startOffset = type.baseType.length;
         }
 
@@ -779,6 +783,8 @@ export function formatTypes()
                 if (field.type.cfieldprefix)
                     buf += field.type.cfieldprefix;
                 buf += field.name;
+                if (field.type.cfieldsuffix)
+                    buf += field.type.cfieldsuffix;
             }
             buf += `;\n`;
             o = field.offset + field.type.length;
