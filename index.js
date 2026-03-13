@@ -738,7 +738,7 @@ export function unpack(type, buf, offset = 0)
 
 export function formatTypes()
 {
-    let buf = "";
+    let buf = "#pragma once\n\n";
 
     for (let t of typeMap.values())
     {
@@ -748,6 +748,7 @@ export function formatTypes()
         // Ensure the type is fully laid out (may not have been packed yet)
         findType(t);
 
+        buf += `// ${t.name}\n`;
         buf += `typedef struct __attribute__((packed)) \n`;
         buf += `{\n`
 
