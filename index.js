@@ -750,7 +750,7 @@ export function formatTypes()
         // Ensure the type is fully laid out (may not have been packed yet)
         findType(t);
 
-        buf += `typedef struct __attribute__((packed)) ${t.name} ${t.name}\n`;
+        buf += `typedef struct __attribute__((packed)) ${t.name} ${t.name};\n`;
     }
 
     buf += `\n\n`;
