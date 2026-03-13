@@ -1,6 +1,7 @@
-import { pack, unpack, formatTypes } from "./index.js"
+import { pack, unpack, registerType, formatTypes } from "./index.js"
+import fs from "node:fs";
 
-let type = {
+registerType({
     name: "MyStruct",
     pack: 4,
     fields: [
@@ -12,30 +13,36 @@ let type = {
         { name: "lastName", type: "string" },
         { name: "field3", type: "short" },
 
-        { name: "field4", type: "length" },
+        { name: "field4", type: "length", cname: "field4_count" },
         { name: "field4", type: "int[]*" },
         { name: "blah", type: "bool" },
 
         { name: "strtest", type: "length" },
         { name: "strtest", type: "string" },
-    ]
-}
 
-let bin = pack(type, {
+        { name: "fa", type: "sbyte[3]" },
+    ]
+});
+
+let bin = pack("MyStruct", {
     field1: 33,
     field2: "Hello World",
     field3: 19,
     field4: [23, 34, 46],
-    firstName: "Joe",
-    lastName: "Sixpack",
+    firstName: "Hello World",
+    lastName: "Hello World",
     strtest: "Jolene Sixpack",
+    fa: [1,2,3],
 });
 
 console.log(bin);
 
-console.log(unpack(type, bin.binary));
+fs.writeFileSync("sandbox.bin", bin.binary);
 
-// Test relocations by inserting a header and relocation internal pointers
+
+console.log(unpack("MyStruct", bin.binary));
+
+// Test relocations by inserting a header and relocating internal offsets
 let headerLen = 30;
 let bin2 = Buffer.concat([Buffer.alloc(headerLen), bin.binary]);
 for (let i=0; i<bin.relocations.length; i++)
@@ -44,7 +51,7 @@ for (let i=0; i<bin.relocations.length; i++)
     bin2.writeUInt32LE(bin.binary.readUInt32LE(relocAddr) + headerLen, relocAddr + headerLen);
 }
 
-console.log(unpack(type, bin2, headerLen));
+console.log(unpack("MyStruct", bin2, headerLen));
 
 
 console.log(formatTypes());

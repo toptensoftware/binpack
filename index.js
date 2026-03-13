@@ -6,7 +6,7 @@ let buildInTypes =
         length: 4,
         meta: true,
         cfieldprefix: "len_",
-        pack: (ctx, v) => ctx.buf.writeUInt32LE(v.length, ctx.offset),
+        pack: (ctx, v) => ctx.buf.writeUInt32LE(v?.length ?? 0, ctx.offset),
         unpack: (ctx) => ctx.buf.readUInt32LE(ctx.offset),
     },
 
@@ -91,11 +91,19 @@ let buildInTypes =
         cname: "const char*",
         length: 4,
         pack: (ctx, v) => {
+            if (v === null || v === undefined) {
+                ctx.buf.writeUInt32LE(0, ctx.offset);
+                return;
+            }
             let id = ctx.allocateString(v);
             ctx.buf.writeUInt32LE(id, ctx.offset),
-            ctx.registerVarLenRef(ctx.offset)
+            ctx.registerBlobRef(ctx.offset)
         },
-        unpack: (ctx) => ctx.readString(ctx.buf.readInt32LE(ctx.offset), ctx.length),
+        unpack: (ctx) => {
+            let ptr = ctx.buf.readInt32LE(ctx.offset);
+            if (ptr === 0) return null;
+            return ctx.readString(ptr, ctx.length);
+        },
     }
 ];
 
@@ -145,39 +153,107 @@ export function findType(type)
                 cname: t.cname,
             }
         }
-        else
+
+        let m = type.match(/(.*)\[(\d+)\]$/);
+        if (m)
         {
-            type = typeMap.get(type);
-            if (!type)
-                throw new Error(`Unknown type '${name}'`);
+            let t = findType(m[1]);
+            let fixedLength = parseInt(m[2]);
+            return {
+                array: t,
+                fixedLength,
+                length: fixedLength * t.length,
+                cname: t.cname,
+            }
         }
+
+
+        type = typeMap.get(type);
+        if (!type)
+            throw new Error(`Unknown type '${name}'`);
     }
 
     // Struct?
     if (type.fields && type.length === undefined)
     {
-        if (!typeMap.has(type.name))
-            typeMap.set(type.name, type);
+        // Guard against self-referential types: if we encounter this type
+        // again while laying it out (via a pointer field), return the
+        // partially-constructed object — pointer wrappers hardcode length:4
+        // so they don't need the struct's length to be set yet.
+        if (type._computing) return type;
+        type._computing = true;
 
-        // Layout structure
-        let offset = 0;
-        let pack = type.pack ?? 4;
+        // Pre-pass: collect field names that have a "length" meta-type so that
+        // a plain pointer "T*" on the same field name can be treated as "T[]*".
+        let hasLengthMeta = new Set();
+        for (let field of type.fields)
+        {
+            let rawType = typeof field.type === 'string' ? field.type : (field.type?.name ?? '');
+            if (rawType === 'length')
+                hasLengthMeta.add(field.name);
+        }
+
+        // Derived types: lay out own fields after the base type
+        let startOffset = 0;
+        if (type.extends)
+        {
+            type.baseType = findType(type.extends);
+            startOffset = type.baseType.length;
+        }
+
+        // Layout own fields
+        let offset = startOffset;
+        let pack = type.pack ?? type.baseType?.pack ?? 4;
         for (let field of type.fields)
         {
             field.offset = offset;
             field.type = findType(field.type);
+
+            // Upgrade plain pointer to array pointer when a length meta-field
+            // with the same name exists (shorthand: "int*" instead of "int[]*").
+            if (field.type.reference && !field.type.reference.array && hasLengthMeta.has(field.name))
+            {
+                field.type = {
+                    ...field.type,
+                    reference: { array: field.type.reference, cname: field.type.reference.cname },
+                };
+            }
+
             offset += field.type.length + (field.padding ?? 0);
             offset = align(offset, pack);
         }
 
         // Store size
         type.length = offset;
+        delete type._computing;
+
+        // Propagate defaults from primary fields to their meta (length) fields.
+        // e.g. if "items" has default:[], the preceding length field for "items"
+        // should use the same default so v.length resolves correctly.
+        for (let field of type.fields)
+        {
+            if (field.type.meta && field.default === undefined)
+            {
+                let primary = type.fields.find(f => f.name === field.name && !f.type.meta);
+                if (primary?.default !== undefined)
+                    field.default = primary.default;
+            }
+        }
     }
 
     // Return it
     return type;
 }
 
+
+// Return all fields for a type in inheritance order (root ancestor first).
+// Field offsets are pre-computed so the result can be used directly for
+// both packing and unpacking without any offset adjustment.
+function allFields(type)
+{
+    if (!type.baseType) return type.fields;
+    return [...allFields(type.baseType), ...type.fields];
+}
 
 export class BinPack
 {
@@ -205,29 +281,44 @@ export class BinPack
         this.buf = newBuf;
     }
 
-    #varLenBuffers = [];
-    appendVarLenBuffer(buf)
+    #nextBlobOffset = 0;
+    #blobBuffers = new Map();
+    appendBlobBuffer(buf)
     {
-        // Make sure buffer is aligned
-        if (buf.length % 4 != 0)
+        let existing = this.#blobBuffers.get(buf);
+        if (existing)
         {
-            let newBuf = Buffer.alloc(buf.length + 4 - buf.length % 4);
-            buf.copy(newBuf, 0);
-            buf = newBuf;
+            return existing.id;
         }
-        this.#varLenBuffers.push(buf);
-        return this.#varLenBuffers.length - 1;
+
+        let id = this.#blobBuffers.size;
+        this.#blobBuffers.set(buf, {
+            buf,
+            id,
+            offset: this.#nextBlobOffset,
+        });
+
+        this.#nextBlobOffset = align(this.#nextBlobOffset + buf.length, 4);
+
+        return id;
     }
 
+    #stringBufs = new Map();
     allocateString(string)
     {
-        return this.appendVarLenBuffer(Buffer.from(string + "\0", "utf8"));
+        let buf = this.#stringBufs.get(string);
+        if (!buf)
+        {
+            buf = Buffer.from(string + "\0", "utf8")
+            this.#stringBufs.set(string, buf);
+        }
+        return this.appendBlobBuffer(buf);
     }
 
-    #varLenRefs = [];
-    registerVarLenRef(offset)
+    #blobRefs = [];
+    registerBlobRef(offset)
     {
-        this.#varLenRefs.push(offset);
+        this.#blobRefs.push(offset);
     }
 
     #pointers = [];
@@ -290,14 +381,30 @@ export class BinPack
         // Reference?
         if (type.reference)
         {
-            this.registerPendingRef(this.offset, type.reference, value);
+            if (value === null || value === undefined) {
+                this.buf.writeUInt32LE(0, this.offset);
+            } else {
+                this.registerPendingRef(this.offset, type.reference, value);
+            }
             this.offset += 4;
             return;
         }
 
         // Array?
-        if (Array.isArray(value) && type.array)
+        if (type.array && (Array.isArray(value) || Buffer.isBuffer(value)))
         {
+            if (type.fixedLength !== undefined && value.length != type.fixedLength)
+            {
+                throw new Error(`Fixed length array mismatch (expected ${type.fixedLength}, got ${value.length})`);
+            }
+            // Fast path: Buffer input for byte arrays
+            if (Buffer.isBuffer(value) && type.array.name === 'byte')
+            {
+                this.reserve(this.offset + value.length);
+                value.copy(this.buf, this.offset);
+                this.offset += value.length;
+                return;
+            }
             for (let v of value)
             {
                 this.pack(type.array, v);
@@ -308,16 +415,51 @@ export class BinPack
         // Structure?
         if (type.fields)
         {
-            // Capture base offset of this field
-            let baseOffset = this.offset;
-            for (let f of type.fields)
+            // Virtual dispatch: if this is a virtual base type, resolve to the
+            // actual derived type and pack that instead.
+            if (type.resolveVirtualType)
             {
-                // Pack to field position
-                this.offset = baseOffset + f.offset;
-                this.pack(f.type, value[f.name]);
+                let actualTypeName = type.resolveVirtualType(value);
+                this.pack(findType(actualTypeName), value);
+                return;
             }
 
-            // Update offset to end of structu
+            // Strict mode: reject unrecognized fields in the value object.
+            // Checks against all fields in the full inheritance chain.
+            // Skips functions, keys starting with '$', and names in type.ignore.
+            // Disabled entirely when type.strict === false.
+            if (type.strict !== false)
+            {
+                let knownNames = new Set(allFields(type).map(f => f.name));
+                let ignored = new Set(type.ignore ?? []);
+                for (let key of Object.keys(value))
+                {
+                    if (key.startsWith('$')) continue;
+                    if (typeof value[key] === 'function') continue;
+                    if (knownNames.has(key)) continue;
+                    if (ignored.has(key)) continue;
+                    throw new Error(`Unrecognized field '${key}' in type '${type.name}'`);
+                }
+            }
+
+            // Pack all fields in inheritance order (base fields first).
+            // allFields() returns root-ancestor fields first with correct offsets.
+            let baseOffset = this.offset;
+            for (let f of allFields(type))
+            {
+                this.offset = baseOffset + f.offset;
+                let v = value[f.name];
+                if (v === undefined)
+                {
+                    if (f.default !== undefined)
+                        v = f.default;
+                    else
+                        throw new Error(`Missing required field '${f.name}'`);
+                }
+                this.pack(f.type, v);
+            }
+
+            // Update offset to end of struct
             this.offset = baseOffset + type.length;
             return;
         }
@@ -334,11 +476,10 @@ export class BinPack
         this.packPendingRefs();
 
         // Work out final layout
-        let varLenOffset = this.offset;
-        let varLenLength = this.#varLenBuffers.reduce((a, b) => a + b.length, 0);
+        let blobBaseOffset = this.offset;
+        let blobLength = this.#nextBlobOffset;
 
-        var totalSize = varLenOffset + varLenLength;
-
+        var totalSize = blobBaseOffset + blobLength;
 
         // Allocate buffer
         let buf = Buffer.alloc(totalSize);
@@ -347,20 +488,18 @@ export class BinPack
         this.buf.copy(buf, 0);
 
         // Copy variable length data
-        let o = varLenOffset;
-        let varLenOffsets = [];
-        for (let i=0; i<this.#varLenBuffers.length; i++)
+        let blobIdMap = new Map();
+        for (let b of this.#blobBuffers.values())
         {
-            varLenOffsets.push(o);
-            this.#varLenBuffers[i].copy(buf, o);
-            o += this.#varLenBuffers[i].length;
+            b.buf.copy(buf, blobBaseOffset + b.offset);
+            blobIdMap.set(b.id, b);
         }
 
-        // Setup var len offset
-        for (let vlr of this.#varLenRefs)
+        // Create blob references
+        for (let vlr of this.#blobRefs)
         {
-            let index = buf.readUInt32LE(vlr);
-            buf.writeUInt32LE(varLenOffsets[index], vlr);
+            let blobId = buf.readUInt32LE(vlr);
+            buf.writeUInt32LE(blobBaseOffset + blobIdMap.get(blobId).offset, vlr);
             this.registerPointer(vlr);
         }
 
@@ -404,8 +543,16 @@ export function unpack(type, buf, offset = 0)
         // Array
         if (type.array)
         {
-            if (length === undefined || length === null)
+            if (type.fixedLength !== undefined)
+            {
+                length = type.fixedLength;
+            }
+            else if (length === undefined || length === null)
                 throw new Error("Length required to deserialize array");
+
+            // Return a Buffer for byte arrays
+            if (type.array.name === 'byte')
+                return buf.subarray(offset, offset + length);
 
             let r = [];
             for (let i=0; i<length; i++)
@@ -420,6 +567,7 @@ export function unpack(type, buf, offset = 0)
         {
             // Read offset
             let refoff = buf.readUInt32LE(offset);
+            if (refoff === 0) return null;
             let val = deserializedRefs.get(refoff);
             if (val === undefined)
             {
@@ -432,26 +580,49 @@ export function unpack(type, buf, offset = 0)
         if (type.fields)
         {
             let r = {};
-            let meta = {};
 
-            // Read meta values (ie: array lengths)
-            for (let field of type.fields)
+            if (type.resolveVirtualType)
             {
-                if (field.type.meta)
-                {
-                    meta[field.name] = helper(field.type, offset + field.offset);
-                }
+                // --- Virtual base type ---
+                // 1. Unpack this type's own fields to get enough data to resolve.
+                unpackFields(type.fields, r);
+
+                // 2. Resolve to the concrete derived type.
+                let derivedType = findType(type.resolveVirtualType(r));
+
+                // 3. Collect the chain from derivedType up to (not including) this
+                //    base type, in base-first order.
+                let chain = [];
+                for (let t = derivedType; t && t !== type; t = t.baseType)
+                    chain.unshift(t);
+
+                // 4. Unpack each level's own fields.
+                for (let t of chain)
+                    unpackFields(t.fields, r);
+            }
+            else
+            {
+                // --- Normal or non-virtual derived type ---
+                // allFields() yields base-ancestor fields first with correct offsets.
+                unpackFields(allFields(type), r);
             }
 
-            // Read actual values
-            for (let field of type.fields)
-            {
-                if (!field.type.meta)
-                {
-                    r[field.name] = helper(field.type, offset + field.offset, meta[field.name]);
-                }
-            }
             return r;
+
+            function unpackFields(fields, r)
+            {
+                let meta = {};
+                for (let field of fields)
+                {
+                    if (field.type.meta)
+                        meta[field.name] = helper(field.type, offset + field.offset);
+                }
+                for (let field of fields)
+                {
+                    if (!field.type.meta)
+                        r[field.name] = helper(field.type, offset + field.offset, meta[field.name]);
+                }
+            }
         }
 
         ctx.offset = offset;
@@ -469,11 +640,22 @@ export function formatTypes()
         if (!t.fields)
             continue;
 
+        // Ensure the type is fully laid out (may not have been packed yet)
+        findType(t);
+
         buf += `typedef struct __attribute__((packed)) \n`;
         buf += `{\n`
 
         let o = 0;
         let padIndex = 1;
+
+        // Derived types: embed the base struct as the first member
+        if (t.baseType)
+        {
+            buf += `\t/*    0 */\t${t.baseType.name} base;\n`;
+            o = t.baseType.length;
+        }
+
         for (let field of t.fields)
         {
             if (field.offset != o)
@@ -484,12 +666,26 @@ export function formatTypes()
             buf += `\t`;
             buf += `/* ${field.offset.toString().padStart(4)} */\t`
             buf += field.type.cname ?? field.type.name;
+            if (field.type.array && field.type.fixedLength)
+                buf += `[${field.type.fixedLength}]`;
             buf += ' ';
-            if (field.type.cfieldprefix)
-                buf += field.type.cfieldprefix;
-            buf += field.name;
-            buf += `,\n`;
+            if (field.cname)
+            {
+                buf += field.cname;
+            }
+            else
+            {
+                if (field.type.cfieldprefix)
+                    buf += field.type.cfieldprefix;
+                buf += field.name;
+            }
+            buf += `;\n`;
             o = field.offset + field.type.length;
+        }
+
+        if (t.length != o)
+        {
+            buf += `\tuint8_t _pad${padIndex++}[${t.length - o}];\n`;
         }
 
         buf += `} ${t.name};\n\n`;

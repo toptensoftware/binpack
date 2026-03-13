@@ -15,5 +15,8 @@
     "url": "https://github.com/toptensoftware/irlib"
   },
   "author": "Topten Software",
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test.js"
+  }
 }
