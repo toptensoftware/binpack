@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { clargs, showArgs, showPackageVersion } from "@toptensoftware/clargs";
-import { pack, unpack, registerType, formatTypes, enable64BitMode } from "./index.js";
+import { pack, unpack, registerType, formatTypes, enable64BitMode, disableUnpackMappers } from "./index.js";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -57,6 +57,7 @@ async function main() {
     let combine   = true;
     let combined  = null;   // null = auto-detect for unpack, true/false = override
     let outFile   = null;
+    let noUnpackMappers = false;
     let positional = [];
 
     while (args.next()) {
@@ -74,6 +75,8 @@ async function main() {
             combined = false;
         } else if (args.name === "out") {
             outFile = args.readValue();
+        } else if (args.name === "disable-unpack-mappers") {
+            noUnpackMappers = true;
         } else if (args.name === "help" || args.name === "h") {
             showPackageVersion(new URL("./package.json", import.meta.url).pathname.replace(/^\//, ''));
             console.log("\nUsage: binpack [options] <datafile> [<typefile>]");
@@ -82,9 +85,10 @@ async function main() {
             showArgs({
                 "--64bit":           "Use 64-bit pointer mode when packing (default: 32-bit)",
                 "--no-combine":      "Write separate .bin and .reloc.bin files instead of a single combined file",
-                "--combined":        "Force combined-format detection when unpacking",
-                "--separate":        "Force separate-format detection when unpacking",
-                "--out:<file>":      "Output file name (overrides default derived from input file name)",
+                "--combined":                 "Force combined-format detection when unpacking",
+                "--separate":                 "Force separate-format detection when unpacking",
+                "--disable-unpack-mappers":   "Skip unpackMapper functions when unpacking (diagnostic)",
+                "--out:<file>":               "Output file name (overrides default derived from input file name)",
                 "--header:<file>":   "Write C header file with type definitions (pack mode only)",
                 "--help":            "Show this help message",
             });
@@ -127,7 +131,7 @@ async function main() {
 
     // Unpack mode: input is a .bin file
     if (path.extname(inputFile).toLowerCase() === ".bin") {
-        await doUnpack(inputFile, typeFile, outFile, combined);
+        await doUnpack(inputFile, typeFile, outFile, combined, noUnpackMappers);
         return;
     }
 
@@ -218,7 +222,7 @@ async function doPack(dataFile, typeFile, outFile, use64bit, combine, headerFile
     }
 }
 
-async function doUnpack(binFile, typeFile, outFile, combinedOverride) {
+async function doUnpack(binFile, typeFile, outFile, combinedOverride, noUnpackMappers) {
     const typeDefs = await loadTypeDefs(typeFile);
     const rootType = typeDefs[0].name;
 
@@ -236,7 +240,13 @@ async function doUnpack(binFile, typeFile, outFile, combinedOverride) {
     // are already file-relative, so passing the whole buffer with offset=HEADER_SIZE
     // lets unpack resolve them correctly.
     const offset = isCombined ? HEADER_SIZE : 0;
-    const result = unpack(rootType, buf, offset);
+    if (noUnpackMappers) disableUnpackMappers(true);
+    let result;
+    try {
+        result = unpack(rootType, buf, offset);
+    } finally {
+        if (noUnpackMappers) disableUnpackMappers(false);
+    }
 
     const jsonOut = JSON.stringify(result, (_, v) =>
         typeof v === 'bigint' ? v.toString() : v, 2);

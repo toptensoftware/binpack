@@ -587,6 +587,26 @@ registerType({
 Mappers apply wherever the type is used — as a direct field, as the target of
 a pointer (`ColourIndex*`), or as an array element (`ColourIndex[]*`).
 
+**Disabling unpack mappers**
+
+Call `disableUnpackMappers(true)` to skip all `unpackMapper` functions during
+unpacking.  This is a diagnostic tool: it lets you inspect the raw packed
+values without any remapping applied.
+
+```js
+import { disableUnpackMappers } from "@toptensoftware/binpack";
+
+disableUnpackMappers(true);
+let raw = unpack("Palette", binary);   // returns { primary: { index: 2 }, ... }
+disableUnpackMappers(false);
+```
+
+From the CLI, pass `--disable-unpack-mappers` when unpacking:
+
+```bash
+binpack data.bin types.json --disable-unpack-mappers
+```
+
 
 ## Command Line Tool
 
@@ -606,6 +626,7 @@ binpack [options] <packedfile.bin> [<typefile>]
 | `--no-combine` | Write separate `.bin` and `.reloc.bin` files instead of a single combined file |
 | `--combined` | Force combined-format interpretation when unpacking |
 | `--separate` | Force separate-format interpretation when unpacking |
+| `--disable-unpack-mappers` | Skip `unpackMapper` functions when unpacking (diagnostic) |
 | `--out:<file>` | Override the default output file name |
 | `--header:<file>` | Write a C header file with type definitions (pack mode only) |
 | `--help` | Show usage |

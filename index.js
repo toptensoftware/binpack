@@ -114,6 +114,15 @@ let typeMap = new Map();
 // Change via enable64BitMode().
 let ptrSize = 4;
 
+// When true, unpackMapper functions are skipped during unpack().
+// Toggle via disableUnpackMappers().
+let unpackMappersDisabled = false;
+
+export function disableUnpackMappers(disabled)
+{
+    unpackMappersDisabled = disabled;
+}
+
 // Write a pointer value into buf at offset.  The value is always a 32-bit
 // offset (we don't need > 4 GB address spaces), but in 64-bit mode the field
 // is 8 bytes wide so we zero-fill the upper half.
@@ -686,7 +695,7 @@ export function unpack(type, buf, offset = 0)
         // Apply unpack mapper after unpacking.
         // containingObj is the partially-built parent struct: all fields declared
         // before the current one are already present.
-        if (type.unpackMapper)
+        if (type.unpackMapper && !unpackMappersDisabled)
             result = type.unpackMapper(result, containingObj);
 
         return result;
