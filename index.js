@@ -741,6 +741,10 @@ export function formatTypes()
     let buf = "#pragma once\n\n";
     buf += `#include <stdint.h>\n\n`;
 
+    buf += `#ifdef __cplusplus\n`;
+    buf += `extern "C" {\n`;
+    buf += `#endif\n\n`;
+
     buf += "// Forward declarations\n";
     for (let t of typeMap.values())
     {
@@ -750,7 +754,7 @@ export function formatTypes()
         // Ensure the type is fully laid out (may not have been packed yet)
         findType(t);
 
-        buf += `typedef struct __attribute__((packed)) ${t.name} ${t.name};\n`;
+        buf += `typedef struct ${t.name} ${t.name};\n`;
     }
 
     buf += `\n\n`;
@@ -761,7 +765,7 @@ export function formatTypes()
             continue;
 
         buf += `// ${t.name}\n`;
-        buf += `typedef struct __attribute__((packed)) \n`;
+        buf += `struct __attribute__((packed)) ${t.name}\n`;
         buf += `{\n`
 
         let o = 0;
@@ -784,8 +788,6 @@ export function formatTypes()
             buf += `\t`;
             buf += `/* ${field.offset.toString().padStart(4)} */\t`
             buf += field.type.cname ?? field.type.name;
-            if (field.type.array && field.type.fixedLength)
-                buf += `[${field.type.fixedLength}]`;
             buf += ' ';
             if (field.cname)
             {
@@ -799,6 +801,8 @@ export function formatTypes()
                 if (field.type.cfieldsuffix)
                     buf += field.type.cfieldsuffix;
             }
+            if (field.type.array && field.type.fixedLength)
+                buf += `[${field.type.fixedLength}]`;
             buf += `;\n`;
             o = field.offset + field.type.length;
         }
@@ -808,8 +812,12 @@ export function formatTypes()
             buf += `\tuint8_t _pad${padIndex++}[${t.length - o}];\n`;
         }
 
-        buf += `} ${t.name};\n\n`;
+        buf += `};\n\n`;
     }
+
+    buf += `#ifdef __cplusplus\n`;
+    buf += `}\n`;
+    buf += `#endif\n\n`;
 
     return buf;
 
