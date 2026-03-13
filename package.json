@@ -16,7 +16,13 @@
   },
   "author": "Topten Software",
   "license": "MIT",
+  "bin": {
+    "binpack": "./cli.js"
+  },
   "scripts": {
     "test": "node --test test.js"
+  },
+  "dependencies": {
+    "@toptensoftware/clargs": "github:toptensoftware/clargs"
   }
 }

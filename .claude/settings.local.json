@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(node cli.js /tmp/test_data2.json /tmp/test_types2.json && xxd /tmp/test_data2.bin)",
+      "Bash(node cli.js /tmp/test_data2.json /tmp/test_types2.json --no-combine && xxd /tmp/test_data2.bin && xxd /tmp/test_data2.reloc.bin)"
     ]
   }
 }

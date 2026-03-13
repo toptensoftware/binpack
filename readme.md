@@ -10,6 +10,14 @@ format suitable for use from C code.
 npm install --save toptensoftware/binpack
 ```
 
+## Command Line Tool
+
+- [CLI Overview](#cli-overview)
+- [Packing (CLI)](#packing-cli)
+- [Unpacking (CLI)](#unpacking-cli)
+- [Combined File Format](#combined-file-format)
+- [Type Definition Files](#type-definition-files)
+
 ## Usage
 
 - [Overview](#overview)
@@ -498,6 +506,152 @@ typedef struct __attribute__((packed))
     /*    4 */  int32_t width;
     /*    8 */  int32_t height;
 } Rect;
+```
+
+
+## Command Line Tool
+
+### CLI Overview
+
+binpack ships with a `binpack` CLI that packs JSON data files into binary and
+unpacks binary files back to JSON, without writing any JavaScript.
+
+```
+binpack [options] <datafile> [<typefile>]
+binpack [options] <packedfile.bin> [<typefile>]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--64bit` | Use 64-bit pointer mode when packing |
+| `--no-combine` | Write separate `.bin` and `.reloc.bin` files instead of a single combined file |
+| `--combined` | Force combined-format interpretation when unpacking |
+| `--separate` | Force separate-format interpretation when unpacking |
+| `--out:<file>` | Override the default output file name |
+| `--header:<file>` | Write a C header file with type definitions (pack mode only) |
+| `--help` | Show usage |
+
+The `<typefile>` argument is optional.  If omitted, binpack looks for
+`binpack.js` or `binpack.json` in the current working directory.
+
+
+### Packing (CLI)
+
+The data file and type definition file can each be `.json` or `.js`.  A `.js`
+file must use a default export.
+
+```bash
+binpack data.json types.json
+```
+
+By default, output is a single combined file (see [Combined File Format](#combined-file-format)):
+
+```
+data.bin          ← combined header + packed data + relocation table
+```
+
+Pass `--no-combine` to write separate files instead:
+
+```
+data.bin          ← raw packed data
+data.reloc.bin    ← relocation offsets as uint32 LE values
+```
+
+Use `--out` to override the output file name:
+
+```bash
+binpack data.json types.json --out:output.bin
+```
+
+Use `--header` to also emit a C header:
+
+```bash
+binpack data.json types.json --header:types.h
+```
+
+
+### Unpacking (CLI)
+
+Pass a `.bin` file to switch to unpack mode.  binpack reads the binary back
+into a JavaScript object and writes it as JSON.
+
+```bash
+binpack data.bin types.json
+```
+
+Output defaults to `<name>.unpack.json` (e.g. `data.unpack.json`).  Use
+`--out` to override:
+
+```bash
+binpack data.bin types.json --out:result.json
+```
+
+binpack auto-detects combined vs separate format by checking the file
+signature.  Override the detection explicitly if needed:
+
+```bash
+binpack data.bin types.json --combined    # force combined format
+binpack data.bin types.json --separate    # force separate format
+```
+
+
+### Combined File Format
+
+The default combined output is a single self-contained file:
+
+| Offset | Size | Field |
+|--------|------|-------|
+| 0 | 4 | Signature `BPAK` (`0x4B415042`) |
+| 4 | 4 | Version (`1`) |
+| 8 | 4 | Relocation count |
+| 12 | 4 | Relocation table offset (from start of file) |
+| 16 | — | Packed struct data |
+| *reloc offset* | count × 4 | Relocation table — uint32 LE file-relative offsets |
+
+All pointer values within the packed data are pre-adjusted to be relative to
+the start of the file (i.e. they already account for the 16-byte header), so
+the data can be loaded at any base address by adding just the base to each
+pointer listed in the relocation table.
+
+
+### Type Definition Files
+
+A type definition file exports an array of `registerType` definitions.  The
+**first** entry defines the root type used for packing and unpacking.
+
+```js
+// binpack.js
+export default [
+    {
+        name: "Config",
+        fields: [
+            { name: "width",  type: "int", default: 800 },
+            { name: "height", type: "int", default: 600 },
+            { name: "title",  type: "length" },
+            { name: "title",  type: "string", default: null },
+        ]
+    }
+];
+```
+
+```json
+// binpack.json
+[
+    {
+        "name": "Config",
+        "fields": [
+            { "name": "width",  "type": "int", "default": 800 },
+            { "name": "height", "type": "int", "default": 600 }
+        ]
+    }
+]
+```
+
+If the type definition file is named `binpack.js` or `binpack.json` and placed
+in the current directory, the `<typefile>` argument can be omitted:
+
+```bash
+binpack data.json        # uses ./binpack.js or ./binpack.json automatically
 ```
 
 
