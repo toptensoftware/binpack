@@ -1,7 +1,7 @@
 {
   "name": "@toptensoftware/binpack",
   "description": "Node library for generating packed binary data from JSON like objects",
-  "version": "1.0.2w",
+  "version": "1.0.3",
   "main": "index.js",
   "type": "module",
   "contributors": [
