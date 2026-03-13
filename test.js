@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pack, unpack, registerType, findType, formatTypes } from "./index.js";
+import { pack, unpack, registerType, findType, formatTypes, enable64BitMode } from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Primitive round-trips
@@ -689,6 +689,110 @@ test("virtual type: multi-level inheritance", () => {
     assert.equal(result.animal.species, 0);
     assert.equal(result.animal.age, 3);
     assert.equal(result.animal.breed, 7);
+});
+
+// ---------------------------------------------------------------------------
+// 64-bit pointer mode
+// ---------------------------------------------------------------------------
+
+// Helper: run fn in 64-bit mode, always restore 32-bit afterwards
+function with64Bit(fn) {
+    try {
+        enable64BitMode(true);
+        return fn();
+    } finally {
+        enable64BitMode(false);
+    }
+}
+
+test("64-bit: pointer field is 8 bytes wide", () => with64Bit(() => {
+    registerType({
+        name: "PtrSize64",
+        pack: 4,
+        fields: [{ name: "val", type: "int" }, { name: "next", type: "PtrSize64*" }]
+    });
+    let { binary } = pack("PtrSize64", { val: 1, next: null });
+    // int(4) + pointer(8) = 12 bytes
+    assert.equal(binary.length, 12);
+}));
+
+test("64-bit: string field is 8 bytes wide", () => with64Bit(() => {
+    registerType({
+        name: "StrSize64",
+        pack: 4,
+        fields: [
+            { name: "label", type: "length" },
+            { name: "label", type: "string" },
+        ]
+    });
+    // length(4) + string-pointer(8) = 12 bytes header
+    let { binary } = pack("StrSize64", { label: "hi" });
+    assert.equal(binary.readUInt32LE(0), 2);   // length field = 2 bytes
+    assert.equal(binary.readUInt32LE(4), 12);  // pointer to string data (starts at offset 12)
+    assert.equal(binary.readUInt32LE(8), 0);   // upper 4 bytes of pointer = 0
+}));
+
+test("64-bit: pack/unpack round-trip with string", () => with64Bit(() => {
+    let { binary } = pack("StrSize64", { label: "hello" });
+    let result = unpack("StrSize64", binary);
+    assert.equal(result.label, "hello");
+}));
+
+test("64-bit: pack/unpack round-trip with pointer", () => with64Bit(() => {
+    let { binary } = pack("PtrSize64", { val: 42, next: { val: 99, next: null } });
+    let result = unpack("PtrSize64", binary);
+    assert.equal(result.val, 42);
+    assert.equal(result.next.val, 99);
+    assert.equal(result.next.next, null);
+}));
+
+test("64-bit: dynamic array pointer is 8 bytes wide", () => with64Bit(() => {
+    registerType({
+        name: "ArrSize64",
+        pack: 4,
+        fields: [
+            { name: "items", type: "length" },
+            { name: "items", type: "int*"   },
+        ]
+    });
+    // length(4) + pointer(8) = 12 bytes header
+    let { binary } = pack("ArrSize64", { items: [1, 2, 3] });
+    assert.equal(binary.readUInt32LE(0), 3);   // count
+    assert.equal(binary.readUInt32LE(8), 0);   // upper 4 bytes of pointer = 0
+    let result = unpack("ArrSize64", binary);
+    assert.deepEqual(result.items, [1, 2, 3]);
+}));
+
+test("64-bit: null pointer upper bytes are zero", () => with64Bit(() => {
+    let { binary } = pack("PtrSize64", { val: 7, next: null });
+    assert.equal(binary.readUInt32LE(4), 0);  // lower 4 bytes
+    assert.equal(binary.readUInt32LE(8), 0);  // upper 4 bytes
+}));
+
+test("64-bit: relocations list entries are correct offsets", () => with64Bit(() => {
+    let { binary, relocations } = pack("StrSize64", { label: "x" });
+    assert.equal(relocations.length, 1);
+    assert.equal(relocations[0], 4);  // pointer field is at byte 4 (after 4-byte length)
+}));
+
+test("64-bit: switching back to 32-bit restores original layout", () => {
+    // Pack 64-bit, then switch back, verify 32-bit sizes are restored
+    with64Bit(() => pack("StrSize64", { label: "test" }));
+    // Now in 32-bit mode: length(4) + pointer(4) = 8 bytes header
+    let { binary } = pack("StrSize64", { label: "test" });
+    assert.equal(binary.readUInt32LE(0), 4);  // length = 4 bytes
+    assert.equal(binary.readUInt32LE(4), 8);  // pointer to string at offset 8
+});
+
+test("64-bit: enable64BitMode is idempotent", () => {
+    try {
+        enable64BitMode(true);
+        enable64BitMode(true);  // second call is a no-op
+        let { binary } = pack("StrSize64", { label: "x" });
+        assert.equal(binary.length, 16); // 12-byte header + 2-byte string "x\0" padded to 4
+    } finally {
+        enable64BitMode(false);
+    }
 });
 
 // ---------------------------------------------------------------------------

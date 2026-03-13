@@ -89,18 +89,18 @@ let buildInTypes =
     {
         name: "string",
         cname: "const char*",
-        length: 4,
+        length: 4,  // updated by enable64BitMode()
         pack: (ctx, v) => {
             if (v === null || v === undefined) {
-                ctx.buf.writeUInt32LE(0, ctx.offset);
+                writePointer(ctx.buf, 0, ctx.offset);
                 return;
             }
             let id = ctx.allocateString(v);
-            ctx.buf.writeUInt32LE(id, ctx.offset),
-            ctx.registerBlobRef(ctx.offset)
+            writePointer(ctx.buf, id, ctx.offset);
+            ctx.registerBlobRef(ctx.offset);
         },
         unpack: (ctx) => {
-            let ptr = ctx.buf.readInt32LE(ctx.offset);
+            let ptr = readPointer(ctx.buf, ctx.offset);
             if (ptr === 0) return null;
             return ctx.readString(ptr, ctx.length);
         },
@@ -109,6 +109,27 @@ let buildInTypes =
 
 // Map of type name to type
 let typeMap = new Map();
+
+// Current pointer size in bytes (4 for 32-bit targets, 8 for 64-bit targets).
+// Change via enable64BitMode().
+let ptrSize = 4;
+
+// Write a pointer value into buf at offset.  The value is always a 32-bit
+// offset (we don't need > 4 GB address spaces), but in 64-bit mode the field
+// is 8 bytes wide so we zero-fill the upper half.
+function writePointer(buf, value, offset)
+{
+    buf.writeUInt32LE(value, offset);
+    if (ptrSize === 8)
+        buf.writeUInt32LE(0, offset + 4);
+}
+
+// Read a pointer field.  The value always fits in 32 bits; we only read the
+// lower half regardless of ptrSize.
+function readPointer(buf, offset)
+{
+    return buf.readUInt32LE(offset);
+}
 
 // Register build in types
 for (let t of buildInTypes)
@@ -120,6 +141,37 @@ export function registerType(def)
     if (typeMap.has(def.name))
         throw new Error(`Type '${def.name}' already registered`)
     typeMap.set(def.name, def);
+}
+
+// Switch between 32-bit (default) and 64-bit pointer mode.
+// Pointers and string-pointer fields occupy 4 bytes in 32-bit mode and
+// 8 bytes in 64-bit mode.  Values are always ≤ 32-bit offsets; the upper
+// half is zeroed in 64-bit mode.
+// Calling this function invalidates all cached struct layouts so they are
+// recomputed with the new pointer size on next use.
+export function enable64BitMode(enabled)
+{
+    let newPtrSize = enabled ? 8 : 4;
+    if (newPtrSize === ptrSize) return;
+    ptrSize = newPtrSize;
+
+    // Update the string built-in's field width
+    typeMap.get('string').length = ptrSize;
+
+    // Invalidate all cached struct layouts
+    for (let t of typeMap.values())
+    {
+        if (!t.fields) continue;
+        delete t.length;
+        delete t.baseType;
+        delete t._computing;
+        for (let field of t.fields)
+        {
+            delete field.offset;
+            if (field._type !== undefined)
+                field.type = field._type;
+        }
+    }
 }
 
 function align(value, align)
@@ -140,7 +192,7 @@ export function findType(type)
             let t = findType(type.substring(0, type.length - 1));
             return {
                 reference: t,
-                length: 4,
+                length: ptrSize,
                 cname: t.cname + "*",
             }
         }
@@ -207,6 +259,9 @@ export function findType(type)
         for (let field of type.fields)
         {
             field.offset = offset;
+            // Save original type string/object so enable64BitMode() can
+            // restore it when invalidating cached layouts.
+            if (field._type === undefined) field._type = field.type;
             field.type = findType(field.type);
 
             // Upgrade plain pointer to array pointer when a length meta-field
@@ -366,7 +421,7 @@ export class BinPack
             for (let ro of r.offsets)
             {
                 // Store reference offset
-                this.buf.writeUInt32LE(dataOffset, ro);
+                writePointer(this.buf, dataOffset, ro);
 
                 // Register it as a pointer
                 this.registerPointer(ro);
@@ -382,11 +437,11 @@ export class BinPack
         if (type.reference)
         {
             if (value === null || value === undefined) {
-                this.buf.writeUInt32LE(0, this.offset);
+                writePointer(this.buf, 0, this.offset);
             } else {
                 this.registerPendingRef(this.offset, type.reference, value);
             }
-            this.offset += 4;
+            this.offset += ptrSize;
             return;
         }
 
@@ -498,8 +553,8 @@ export class BinPack
         // Create blob references
         for (let vlr of this.#blobRefs)
         {
-            let blobId = buf.readUInt32LE(vlr);
-            buf.writeUInt32LE(blobBaseOffset + blobIdMap.get(blobId).offset, vlr);
+            let blobId = readPointer(buf, vlr);
+            writePointer(buf, blobBaseOffset + blobIdMap.get(blobId).offset, vlr);
             this.registerPointer(vlr);
         }
 
@@ -566,7 +621,7 @@ export function unpack(type, buf, offset = 0)
         if (type.reference)
         {
             // Read offset
-            let refoff = buf.readUInt32LE(offset);
+            let refoff = readPointer(buf, offset);
             if (refoff === 0) return null;
             let val = deserializedRefs.get(refoff);
             if (val === undefined)

@@ -26,6 +26,7 @@ npm install --save toptensoftware/binpack
 - [Strict Mode](#strict-mode)
 - [Inheritance and Virtual Types](#inheritance-and-virtual-types)
 - [Relocations](#relocations)
+- [64-bit Pointer Mode](#64-bit-pointer-mode)
 - [C Header Generation](#c-header-generation)
 
 
@@ -396,17 +397,74 @@ let headerSize = 64;
 // Prepend a header
 let final = Buffer.concat([header, bin.binary]);
 
-// Adjust every pointer by the header size
+// Adjust every pointer by the header size.
+// Use readUInt32LE/writeUInt32LE in 32-bit mode (the default).
+// In 64-bit mode the upper 4 bytes are always zero so reading only the
+// lower half is sufficient, but you must write all 8 bytes:
 for (let offset of bin.relocations) {
     final.writeUInt32LE(
         bin.binary.readUInt32LE(offset) + headerSize,
         offset + headerSize
     );
+    // 64-bit mode: also zero the upper half (already zero, but shown for clarity)
+    // final.writeUInt32LE(0, offset + headerSize + 4);
 }
 
 // final can now be mmap-ed at an address where the struct starts at headerSize
 unpack("MyStruct", final, headerSize);
 ```
+
+
+### 64-bit Pointer Mode
+
+By default binpack targets 32-bit architectures: every pointer and
+string-pointer field occupies 4 bytes.  Call `enable64BitMode(true)` to switch
+to 64-bit mode, where those fields occupy 8 bytes instead.
+
+```js
+import { enable64BitMode } from "@toptensoftware/binpack";
+
+enable64BitMode(true);   // all subsequent pack/unpack calls use 8-byte pointers
+// ... pack / unpack ...
+enable64BitMode(false);  // restore 32-bit mode
+```
+
+**What changes in 64-bit mode**
+
+| Field kind | 32-bit size | 64-bit size |
+|---|---|---|
+| Pointer (`T*`) | 4 | 8 |
+| String pointer (`string`) | 4 | 8 |
+| `length` meta-field | 4 | 4 (unchanged — it is a count, not a pointer) |
+| All primitive types | unchanged | unchanged |
+| Fixed arrays | unchanged | unchanged |
+
+Pointer values are always ≤ 32-bit offsets within the binary buffer, so the
+upper 4 bytes of every 64-bit pointer are always zero.  This means the binary
+can be loaded at any 64-bit base address by adding the base to each pointer
+during relocation — no 64-bit arithmetic is required in the loader.
+
+**Cache invalidation**
+
+`enable64BitMode` discards all cached struct layouts (field offsets, type
+sizes) so they are recomputed with the new pointer size on next use.  Type
+registrations are preserved; only the layout cache is cleared.  Calling
+`enable64BitMode` with the same value it already has is a no-op.
+
+**Typical workflow for a 64-bit build**
+
+```js
+enable64BitMode(true);
+let { binary, relocations } = pack("MyStruct", value);
+enable64BitMode(false);
+```
+
+**C headers for 64-bit targets**
+
+`formatTypes()` emits C pointer types (`const char*`, `int32_t*`, etc.) whose
+natural size on a 64-bit target is already 8 bytes, so the generated headers
+are correct without modification.  Call `formatTypes()` while 64-bit mode is
+active to ensure the emitted struct sizes match the binary layout.
 
 
 ### C Header Generation
