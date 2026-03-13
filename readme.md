@@ -623,9 +623,9 @@ binpack [options] <packedfile.bin> [<typefile>]
 | Option | Description |
 |--------|-------------|
 | `--64bit` | Use 64-bit pointer mode when packing |
-| `--no-combine` | Write separate `.bin` and `.reloc.bin` files instead of a single combined file |
-| `--combined` | Force combined-format interpretation when unpacking |
-| `--separate` | Force separate-format interpretation when unpacking |
+| `--raw` | Pack: write separate `.bin`/`.reloc.bin` files; Unpack: treat input as raw binary (no header) |
+| `--strip` | Omit the relocation table from the combined output; sets reloc count and offset to zero in the header (pack only) |
+| `--base:0xNNNN` | Relocate packed data to the given base address; supply when unpacking `--raw` relocated files |
 | `--disable-unpack-mappers` | Skip `unpackMapper` functions when unpacking (diagnostic) |
 | `--out:<file>` | Override the default output file name |
 | `--header:<file>` | Write a C header file with type definitions (pack mode only) |
@@ -650,7 +650,7 @@ By default, output is a single combined file (see [Combined File Format](#combin
 data.bin          ← combined header + packed data + relocation table
 ```
 
-Pass `--no-combine` to write separate files instead:
+Pass `--raw` to write separate files instead:
 
 ```
 data.bin          ← raw packed data
@@ -669,6 +669,36 @@ Use `--header` to also emit a C header:
 binpack data.json types.json --header:types.h
 ```
 
+**Relocating during pack**
+
+Pass `--base` to pre-relocate the binary to a known load address.  All
+pointer values in the output are adjusted by the base, and the combined
+header records a pointer to the start of the data so the image can be
+unrelocated later.
+
+```bash
+binpack data.json types.json --base:0x20000000
+binpack data.json types.json --raw --base:0x20000000
+```
+
+For 64-bit mode, the base address may be a full 64-bit value:
+
+```bash
+binpack data.json types.json --64bit --base:0x0000000100000000
+```
+
+Pass `--strip` to omit the relocation table from the combined output.  The
+header still records the relocated data pointer if `--base` was used, but
+the reloc count and offset are set to zero.  This is useful for producing a
+final ROM image where relocation is no longer needed.
+
+```bash
+binpack data.json types.json --base:0x20000000 --strip
+```
+
+Note: a stripped file that was relocated cannot be unpacked — binpack will
+fail with an error if you attempt it.
+
 
 ### Unpacking (CLI)
 
@@ -686,12 +716,32 @@ Output defaults to `<name>.unpack.json` (e.g. `data.unpack.json`).  Use
 binpack data.bin types.json --out:result.json
 ```
 
-binpack auto-detects combined vs separate format by checking the file
-signature.  Override the detection explicitly if needed:
+binpack auto-detects combined vs raw format by checking for the `BPAK` /
+`BP64` signature.  Pass `--raw` to force treating the file as plain binary
+with no header:
 
 ```bash
-binpack data.bin types.json --combined    # force combined format
-binpack data.bin types.json --separate    # force separate format
+binpack data.bin types.json --raw
+```
+
+**Unrelocating during unpack**
+
+If the file was packed with `--base`, binpack automatically unrelocates it
+before unpacking.
+
+For combined format the base address is recovered from the stored pointer in
+the header — no extra flags needed:
+
+```bash
+binpack data.bin types.json          # unrelocates automatically if --base was used at pack time
+```
+
+For `--raw` format the base address is not stored in the file, so you must
+supply it explicitly.  The matching `.reloc.bin` file must also be present —
+binpack will fail if it is missing.
+
+```bash
+binpack data.bin types.json --raw --base:0x20000000
 ```
 
 
@@ -701,17 +751,19 @@ The default combined output is a single self-contained file:
 
 | Offset | Size | Field |
 |--------|------|-------|
-| 0 | 4 | Signature `BPAK` (`0x4B415042`) |
+| 0 | 4 | Signature — `BPAK` (`0x4B415042`) in 32-bit mode, `BP64` (`0x34365042`) in 64-bit mode |
 | 4 | 4 | Version (`1`) |
-| 8 | 4 | Relocation count |
-| 12 | 4 | Relocation table offset (from start of file) |
-| 16 | — | Packed struct data |
+| 8 | 4 | Relocation count (0 if stripped) |
+| 12 | 4 | Relocation table offset from start of file (0 if stripped) |
+| 16 | 4 or 8 | Relocated pointer to start of data (`base + 32`); zero if not relocated. 4 bytes in 32-bit mode, 8 bytes in 64-bit mode. |
+| 24 | 8 | Reserved (zero) |
+| 32 | — | Packed struct data |
 | *reloc offset* | count × 4 | Relocation table — uint32 LE file-relative offsets |
 
-All pointer values within the packed data are pre-adjusted to be relative to
-the start of the file (i.e. they already account for the 16-byte header), so
-the data can be loaded at any base address by adding just the base to each
-pointer listed in the relocation table.
+Without `--base`, pointer values in the packed data are file-relative (offset
+from byte 0 of the file).  With `--base`, they are pre-adjusted to the target
+address and must be unrelocated before use by a tool that does not load the
+image at exactly that address.
 
 
 ### Type Definition Files
