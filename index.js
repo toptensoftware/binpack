@@ -589,7 +589,22 @@ export function pack(type, value)
 
 export function unpack(type, buf, offset = 0)
 {
+    // Cache keyed by [typeObject, byteOffset] to avoid collisions when two
+    // different types happen to share the same address (e.g. multiple empty
+    // arrays all pack to the same zero-byte location).
     let deserializedRefs = new Map();
+
+    function getCachedRef(type, refoff)
+    {
+        return deserializedRefs.get(type)?.get(refoff);
+    }
+
+    function setCachedRef(type, refoff, val)
+    {
+        if (!deserializedRefs.has(type))
+            deserializedRefs.set(type, new Map());
+        deserializedRefs.get(type).set(refoff, val);
+    }
 
     let ctx = {
         buf,
@@ -645,11 +660,11 @@ export function unpack(type, buf, offset = 0)
             }
             else
             {
-                result = deserializedRefs.get(refoff);
+                result = getCachedRef(type.reference, refoff);
                 if (result === undefined)
                 {
                     result = helper(type.reference, refoff, length, containingObj);
-                    deserializedRefs.set(refoff, result);
+                    setCachedRef(type.reference, refoff, result);
                 }
             }
         }
