@@ -433,6 +433,11 @@ export class BinPack
     {
         type = findType(type);
 
+        // Apply pack mapper before any packing logic.
+        // rootValue is set by the exported pack() to the top-level object.
+        if (type.packMapper)
+            value = type.packMapper(value, this.rootValue);
+
         // Reference?
         if (type.reference)
         {
@@ -568,6 +573,7 @@ export class BinPack
 export function pack(type, value)
 {
     let bp = new BinPack();
+    bp.rootValue = value;
     bp.pack(type, value);
     return bp.finalize();
 }
@@ -591,9 +597,11 @@ export function unpack(type, buf, offset = 0)
 
     return helper(type, offset);
 
-    function helper(type, offset, length)
+    function helper(type, offset, length, containingObj)
     {
         type = findType(type);
+
+        let result;
 
         // Array
         if (type.array)
@@ -607,43 +615,48 @@ export function unpack(type, buf, offset = 0)
 
             // Return a Buffer for byte arrays
             if (type.array.name === 'byte')
-                return buf.subarray(offset, offset + length);
-
-            let r = [];
-            for (let i=0; i<length; i++)
+                result = buf.subarray(offset, offset + length);
+            else
             {
-                r.push(helper(type.array, offset + i * type.array.length));
+                result = [];
+                for (let i=0; i<length; i++)
+                {
+                    result.push(helper(type.array, offset + i * type.array.length, undefined, containingObj));
+                }
             }
-            return r;
         }
 
         // Reference
-        if (type.reference)
+        else if (type.reference)
         {
-            // Read offset
             let refoff = readPointer(buf, offset);
-            if (refoff === 0) return null;
-            let val = deserializedRefs.get(refoff);
-            if (val === undefined)
+            if (refoff === 0)
             {
-                val = helper(type.reference, refoff, length);
-                deserializedRefs.set(refoff, val);
+                result = null;
             }
-            return val;
+            else
+            {
+                result = deserializedRefs.get(refoff);
+                if (result === undefined)
+                {
+                    result = helper(type.reference, refoff, length, containingObj);
+                    deserializedRefs.set(refoff, result);
+                }
+            }
         }
 
-        if (type.fields)
+        else if (type.fields)
         {
-            let r = {};
+            result = {};
 
             if (type.resolveVirtualType)
             {
                 // --- Virtual base type ---
                 // 1. Unpack this type's own fields to get enough data to resolve.
-                unpackFields(type.fields, r);
+                unpackFields(type.fields, result);
 
                 // 2. Resolve to the concrete derived type.
-                let derivedType = findType(type.resolveVirtualType(r));
+                let derivedType = findType(type.resolveVirtualType(result));
 
                 // 3. Collect the chain from derivedType up to (not including) this
                 //    base type, in base-first order.
@@ -653,36 +666,45 @@ export function unpack(type, buf, offset = 0)
 
                 // 4. Unpack each level's own fields.
                 for (let t of chain)
-                    unpackFields(t.fields, r);
+                    unpackFields(t.fields, result);
             }
             else
             {
                 // --- Normal or non-virtual derived type ---
                 // allFields() yields base-ancestor fields first with correct offsets.
-                unpackFields(allFields(type), r);
-            }
-
-            return r;
-
-            function unpackFields(fields, r)
-            {
-                let meta = {};
-                for (let field of fields)
-                {
-                    if (field.type.meta)
-                        meta[field.name] = helper(field.type, offset + field.offset);
-                }
-                for (let field of fields)
-                {
-                    if (!field.type.meta)
-                        r[field.name] = helper(field.type, offset + field.offset, meta[field.name]);
-                }
+                unpackFields(allFields(type), result);
             }
         }
 
-        ctx.offset = offset;
-        ctx.length = length;
-        return type.unpack(ctx);
+        else
+        {
+            ctx.offset = offset;
+            ctx.length = length;
+            result = type.unpack(ctx);
+        }
+
+        // Apply unpack mapper after unpacking.
+        // containingObj is the partially-built parent struct: all fields declared
+        // before the current one are already present.
+        if (type.unpackMapper)
+            result = type.unpackMapper(result, containingObj);
+
+        return result;
+
+        function unpackFields(fields, r)
+        {
+            let meta = {};
+            for (let field of fields)
+            {
+                if (field.type.meta)
+                    meta[field.name] = helper(field.type, offset + field.offset, undefined, r);
+            }
+            for (let field of fields)
+            {
+                if (!field.type.meta)
+                    r[field.name] = helper(field.type, offset + field.offset, meta[field.name], r);
+            }
+        }
     }
 }
 

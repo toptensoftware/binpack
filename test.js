@@ -828,3 +828,100 @@ test("formatTypes does not include primitive types", () => {
     // Primitives like "int" have no fields, so they should not appear as struct defs
     assert.ok(!output.includes("typedef struct\n{\n} int"), "should not emit struct for int");
 });
+
+// ---------------------------------------------------------------------------
+// packMapper / unpackMapper
+// ---------------------------------------------------------------------------
+
+const COLOUR_MAP = ["red", "green", "blue"];
+
+registerType({
+    name: "ColourIndex",
+    fields: [{ name: "index", type: "int" }],
+    packMapper(value, root) {
+        // Convert colour name string → { index: N }
+        const i = COLOUR_MAP.indexOf(value);
+        if (i === -1) throw new Error(`Unknown colour: ${value}`);
+        return { index: i };
+    },
+    unpackMapper(value, containingObj) {
+        // Convert { index: N } → colour name string
+        return COLOUR_MAP[value.index];
+    },
+});
+
+registerType({
+    name: "Palette",
+    fields: [
+        { name: "primary",   type: "ColourIndex" },
+        { name: "secondary", type: "ColourIndex" },
+    ],
+});
+
+test("packMapper transforms value before packing", () => {
+    const { binary } = pack("Palette", { primary: "blue", secondary: "red" });
+    // Without mapper, packing a string would fail — success means mapper fired
+    // primary index = 2, secondary index = 0
+    assert.equal(binary.readInt32LE(0), 2);
+    assert.equal(binary.readInt32LE(4), 0);
+});
+
+test("unpackMapper transforms value after unpacking", () => {
+    const { binary } = pack("Palette", { primary: "green", secondary: "blue" });
+    const result = unpack("Palette", binary);
+    assert.equal(result.primary,   "green");
+    assert.equal(result.secondary, "blue");
+});
+
+test("packMapper receives root object as second argument", () => {
+    const ITEMS = ["sword", "shield", "potion"];
+    registerType({
+        name: "Inventory",
+        fields: [
+            { name: "count", type: "int" },
+            { name: "item",  type: "ItemSlot" },
+        ],
+    });
+    registerType({
+        name: "ItemSlot",
+        fields: [{ name: "id", type: "int" }],
+        packMapper(value, root) {
+            // root.count is not the lookup table; use a captured closure table here
+            // but verify root is the top-level object
+            assert.ok("count" in root, "root should be the top-level Inventory object");
+            return { id: ITEMS.indexOf(value) };
+        },
+        unpackMapper(value, containingObj) {
+            return ITEMS[value.id];
+        },
+    });
+
+    const { binary } = pack("Inventory", { count: 3, item: "shield" });
+    const result = unpack("Inventory", binary);
+    assert.equal(result.item, "shield");
+});
+
+test("packMapper on pointer type applies to pointed-to value", () => {
+    registerType({
+        name: "MappedPtrHost",
+        fields: [{ name: "colour", type: "ColourIndex*" }],
+    });
+
+    const { binary } = pack("MappedPtrHost", { colour: "green" });
+    const result = unpack("MappedPtrHost", binary);
+    assert.equal(result.colour, "green");
+});
+
+test("packMapper on array element type applies to each element", () => {
+    registerType({
+        name: "PaletteList",
+        fields: [
+            { name: "colours", type: "length" },
+            { name: "colours", type: "ColourIndex*" },
+        ],
+    });
+
+    const { binary } = pack("PaletteList", { colours: ["red", "blue", "green"] });
+    const result = unpack("PaletteList", binary);
+    assert.deepEqual(result.colours, ["red", "blue", "green"]);
+});

@@ -36,6 +36,7 @@ npm install --save toptensoftware/binpack
 - [Relocations](#relocations)
 - [64-bit Pointer Mode](#64-bit-pointer-mode)
 - [C Header Generation](#c-header-generation)
+- [Pack and Unpack Mappers](#pack-and-unpack-mappers)
 
 
 ### Overview
@@ -507,6 +508,84 @@ typedef struct __attribute__((packed))
     /*    8 */  int32_t height;
 } Rect;
 ```
+
+
+### Pack and Unpack Mappers
+
+A registered type can declare `packMapper` and `unpackMapper` functions to
+translate between a convenient user-facing representation and the binary
+representation that is actually packed.
+
+```js
+registerType({
+    name: "TypeName",
+    fields: [ ... ],
+    packMapper(value, root)      { /* return transformed value to pack   */ },
+    unpackMapper(value, containing) { /* return transformed value to return */ },
+});
+```
+
+| Callback | Called | Arguments |
+|----------|--------|-----------|
+| `packMapper` | Before packing a value of this type | `value` — the value to transform; `root` — the top-level object passed to `pack()` |
+| `unpackMapper` | After unpacking a value of this type | `value` — the unpacked value; `containing` — the partially-built parent struct (fields declared before the current field are populated) |
+
+The mapper receives the user-facing value and returns the value that will
+actually be packed (for `packMapper`), or receives the raw unpacked value and
+returns what the caller will see (for `unpackMapper`).
+
+**Example — colour name ↔ integer index**
+
+```js
+const COLOURS = ["red", "green", "blue"];
+
+registerType({
+    name: "ColourIndex",
+    fields: [{ name: "index", type: "int" }],
+    packMapper(value, root) {
+        const i = COLOURS.indexOf(value);
+        if (i === -1) throw new Error(`Unknown colour: ${value}`);
+        return { index: i };        // pack the struct form
+    },
+    unpackMapper(value, containing) {
+        return COLOURS[value.index]; // return the string form
+    },
+});
+
+registerType({
+    name: "Palette",
+    fields: [
+        { name: "primary",   type: "ColourIndex" },
+        { name: "secondary", type: "ColourIndex" },
+    ],
+});
+
+pack("Palette", { primary: "blue", secondary: "red" });
+// binary contains { index:2 } and { index:0 }
+
+let result = unpack("Palette", binary);
+// result = { primary: "blue", secondary: "red" }
+```
+
+**Example — using `root` to resolve names from a top-level table**
+
+```js
+registerType({
+    name: "ItemRef",
+    fields: [{ name: "id", type: "int" }],
+    packMapper(value, root) {
+        // root is the top-level object — can hold lookup tables
+        return { id: root.items.indexOf(value) };
+    },
+    unpackMapper(value, containing) {
+        // containing is the parent struct being built
+        return containing.items?.[value.id] ?? value.id;
+    },
+});
+```
+
+Mappers apply wherever the type is used — as a direct field, as the target of
+a pointer (`ColourIndex*`), or as an array element (`ColourIndex[]*`).
 
 
 ## Command Line Tool
