@@ -36,6 +36,7 @@ npm install --save toptensoftware/binpack
 - [Relocations](#relocations)
 - [64-bit Pointer Mode](#64-bit-pointer-mode)
 - [C Header Generation](#c-header-generation)
+- [Enum Constants](#enum-constants)
 - [Pack and Unpack Mappers](#pack-and-unpack-mappers)
 
 
@@ -508,6 +509,36 @@ typedef struct __attribute__((packed))
     /*    8 */  int32_t height;
 } Rect;
 ```
+
+
+### Enum Constants
+
+`registerEnum(name, values)` registers a set of named integer constants that
+`formatTypes()` will emit as `#define` macros in the generated C header.
+
+```js
+import { registerEnum, formatTypes } from "@toptensoftware/binpack";
+
+registerEnum("fruit", {
+    apple:  1,
+    pear:   2,
+    banana: 3,
+});
+
+console.log(formatTypes());
+```
+
+Produces (among the other type declarations):
+
+```c
+// fruit
+#define FRUIT_APPLE 1
+#define FRUIT_PEAR 2
+#define FRUIT_BANANA 3
+```
+
+The enum name and each key are uppercased automatically.  Registering the same
+name twice throws an error.
 
 
 ### Pack and Unpack Mappers
