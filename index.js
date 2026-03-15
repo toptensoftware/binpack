@@ -110,6 +110,9 @@ let buildInTypes =
 // Map of type name to type
 let typeMap = new Map();
 
+// Map of enum name to value object
+let enumMap = new Map();
+
 // Current pointer size in bytes (4 for 32-bit targets, 8 for 64-bit targets).
 // Change via enable64BitMode().
 let ptrSize = 4;
@@ -143,6 +146,14 @@ function readPointer(buf, offset)
 // Register build in types
 for (let t of buildInTypes)
     registerType(t);
+
+// Register an enum to emit #define constants in formatTypes()
+export function registerEnum(name, values)
+{
+    if (enumMap.has(name))
+        throw new Error(`Enum '${name}' already registered`);
+    enumMap.set(name, values);
+}
 
 // Register custom types
 export function registerType(def)
@@ -744,6 +755,20 @@ export function formatTypes()
     buf += `#ifdef __cplusplus\n`;
     buf += `extern "C" {\n`;
     buf += `#endif\n\n`;
+
+    if (enumMap.size > 0)
+    {
+        for (let [name, values] of enumMap)
+        {
+            const prefix = name.toUpperCase();
+            buf += `// ${name}\n`;
+            for (let [key, value] of Object.entries(values))
+            {
+                buf += `#define ${prefix}_${key.toUpperCase()} ${value}\n`;
+            }
+            buf += `\n`;
+        }
+    }
 
     buf += "// Forward declarations\n";
     for (let t of typeMap.values())

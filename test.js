@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pack, unpack, registerType, findType, formatTypes, enable64BitMode } from "./index.js";
+import { pack, unpack, registerType, registerEnum, findType, formatTypes, enable64BitMode } from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Primitive round-trips
@@ -827,6 +827,21 @@ test("formatTypes does not include primitive types", () => {
     let output = formatTypes();
     // Primitives like "int" have no fields, so they should not appear as struct defs
     assert.ok(!output.includes("typedef struct\n{\n} int"), "should not emit struct for int");
+});
+
+test("registerEnum emits #define constants in formatTypes", () => {
+    registerEnum("fruit", { apple: 1, pear: 2, banana: 3 });
+    let output = formatTypes();
+    assert.ok(output.includes("#define FRUIT_APPLE 1"), "should emit FRUIT_APPLE");
+    assert.ok(output.includes("#define FRUIT_PEAR 2"), "should emit FRUIT_PEAR");
+    assert.ok(output.includes("#define FRUIT_BANANA 3"), "should emit FRUIT_BANANA");
+});
+
+test("registerEnum throws on duplicate name", () => {
+    assert.throws(
+        () => registerEnum("fruit", { apple: 1 }),
+        /Enum 'fruit' already registered/
+    );
 });
 
 // ---------------------------------------------------------------------------
