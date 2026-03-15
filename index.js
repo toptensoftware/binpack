@@ -812,7 +812,9 @@ export function formatTypes()
             buf += `\tuint8_t _pad${padIndex++}[${t.length - o}];\n`;
         }
 
-        buf += `};\n\n`;
+        buf += `};\n`;
+
+        buf += `static_assert(sizeof(${t.name}) == ${t.length}, "Size of ${t.name} must be ${t.length} bytes");\n\n`;   
     }
 
     buf += `#ifdef __cplusplus\n`;
