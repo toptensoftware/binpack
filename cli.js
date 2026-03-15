@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { clargs, showArgs, showPackageVersion } from "@toptensoftware/clargs";
-import { pack, unpack, registerType, formatTypes, enable64BitMode, disableUnpackMappers } from "./index.js";
+import { pack, unpack, registerEnum, registerType, formatTypes, enable64BitMode, disableUnpackMappers } from "./index.js";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -43,7 +43,10 @@ async function loadTypeDefs(typeFile) {
     }
 
     for (const def of typeDefs) {
-        registerType(def);
+        if (def.fields)
+            registerType(def);
+        else if (def.enum)
+            registerEnum(def.name, def.enum);
     }
 
     return typeDefs;
@@ -175,7 +178,7 @@ async function main() {
 
 async function doPack(dataFile, typeFile, outFile, use64bit, raw, strip, base, headerFile) {
     const typeDefs = await loadTypeDefs(typeFile);
-    const rootType = typeDefs[0].name;
+    const rootType = typeDefs.filter(x => !!x.fields)[0].name;
     const data     = await loadFile(dataFile);
 
     if (use64bit) enable64BitMode(true);

@@ -62,14 +62,14 @@ let buildInTypes =
         name: "long",
         cname: "int64_t",
         length: 8,
-        pack: (ctx, v) => ctx.buf.writeBigInt64LE(v, ctx.offset),
+        pack: (ctx, v) => ctx.buf.writeBigInt64LE(BigInt(v), ctx.offset),
         unpack: (ctx) => ctx.buf.readBigInt64LE(ctx.offset),
     },
     {
         name: "ulong", 
         cname: "uint64_t",
         length: 8,
-        pack: (ctx, v) => ctx.buf.writeUBigInt64LE(v, ctx.offset),
+        pack: (ctx, v) => ctx.buf.writeBigUInt64LE(BigInt(v), ctx.offset),
         unpack: (ctx) => ctx.buf.readBigUInt64LE(ctx.offset),
     },
     {
