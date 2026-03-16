@@ -295,7 +295,7 @@ async function doPack(dataFile, typeFile, outFile, use64bit, raw, strip, base, h
 
 async function doUnpack(binFile, typeFile, outFile, raw, base, use64bit, noUnpackMappers) {
     const typeDefs = await loadTypeDefs(typeFile);
-    const rootType = typeDefs[0].name;
+    const rootType = typeDefs.filter(x => !!x.fields)[0].name;
 
     // Work on a mutable copy so we can unrelocate in place
     const buf = Buffer.from(fs.readFileSync(binFile));
