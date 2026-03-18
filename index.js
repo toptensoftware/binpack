@@ -611,16 +611,18 @@ export function unpack(type, buf, offset = 0)
     // arrays all pack to the same zero-byte location).
     let deserializedRefs = new Map();
 
-    function getCachedRef(type, refoff)
+    function getCachedRef(type, refoff, length)
     {
-        return deserializedRefs.get(type)?.get(refoff);
+        const key = length !== undefined ? `${refoff}:${length}` : refoff;
+        return deserializedRefs.get(type)?.get(key);
     }
 
-    function setCachedRef(type, refoff, val)
+    function setCachedRef(type, refoff, length, val)
     {
         if (!deserializedRefs.has(type))
             deserializedRefs.set(type, new Map());
-        deserializedRefs.get(type).set(refoff, val);
+        const key = length !== undefined ? `${refoff}:${length}` : refoff;
+        deserializedRefs.get(type).set(key, val);
     }
 
     let ctx = {
@@ -677,11 +679,11 @@ export function unpack(type, buf, offset = 0)
             }
             else
             {
-                result = getCachedRef(type.reference, refoff);
+                result = getCachedRef(type.reference, refoff, length);
                 if (result === undefined)
                 {
                     result = helper(type.reference, refoff, length, containingObj);
-                    setCachedRef(type.reference, refoff, result);
+                    setCachedRef(type.reference, refoff, length, result);
                 }
             }
         }
