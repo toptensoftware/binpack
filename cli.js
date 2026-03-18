@@ -100,6 +100,8 @@ async function main() {
             outFile = args.readValue();
         } else if (args.name === "disable-unpack-mappers") {
             noUnpackMappers = true;
+        } else if (args.name === "version" || args.name === "v") {
+            showPackageVersion(new URL("./package.json", import.meta.url).pathname.replace(/^\//, ''));
         } else if (args.name === "help" || args.name === "h") {
             showPackageVersion(new URL("./package.json", import.meta.url).pathname.replace(/^\//, ''));
             console.log("\nUsage: binpack [options] <datafile> [<typefile>]");
@@ -113,6 +115,7 @@ async function main() {
                 "--disable-unpack-mappers":   "Skip unpackMapper functions when unpacking (diagnostic)",
                 "--out:<file>":               "Output file name (overrides default derived from input file name)",
                 "--header:<file>":            "Write C header file with type definitions (pack mode only)",
+                "--version":                  "Show version info", 
                 "--help":                     "Show this help message",
             });
             console.log("\nArguments:");

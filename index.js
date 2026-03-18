@@ -540,6 +540,8 @@ export class BinPack
                     else
                         throw new Error(`Missing required field '${f.name}'`);
                 }
+                if (f.packMapper)
+                    v = f.packMapper(v, this.rootValue);
                 this.pack(f.type, v);
             }
 
@@ -741,7 +743,12 @@ export function unpack(type, buf, offset = 0)
             for (let field of fields)
             {
                 if (!field.type.meta)
-                    r[field.name] = helper(field.type, offset + field.offset, meta[field.name], r);
+                {
+                    let fieldVal = helper(field.type, offset + field.offset, meta[field.name], r);
+                    if (field.unpackMapper && !unpackMappersDisabled)
+                        fieldVal = field.unpackMapper(fieldVal, r);
+                    r[field.name] = fieldVal;
+                }
             }
         }
     }

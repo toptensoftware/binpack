@@ -940,3 +940,83 @@ test("packMapper on array element type applies to each element", () => {
     const result = unpack("PaletteList", binary);
     assert.deepEqual(result.colours, ["red", "blue", "green"]);
 });
+
+// ---------------------------------------------------------------------------
+// Field-level packMapper / unpackMapper
+// ---------------------------------------------------------------------------
+
+registerType({
+    name: "FieldMapperHost",
+    fields: [
+        {
+            name: "colour",
+            type: "int",
+            packMapper(value, root) {
+                return COLOUR_MAP.indexOf(value);
+            },
+            unpackMapper(value, containingObj) {
+                return COLOUR_MAP[value];
+            },
+        },
+        { name: "count", type: "int" },
+    ],
+});
+
+test("field packMapper transforms value before packing", () => {
+    const { binary } = pack("FieldMapperHost", { colour: "blue", count: 3 });
+    assert.equal(binary.readInt32LE(0), 2); // "blue" → index 2
+    assert.equal(binary.readInt32LE(4), 3);
+});
+
+test("field unpackMapper transforms value after unpacking", () => {
+    const { binary } = pack("FieldMapperHost", { colour: "green", count: 7 });
+    const result = unpack("FieldMapperHost", binary);
+    assert.equal(result.colour, "green");
+    assert.equal(result.count, 7);
+});
+
+test("field packMapper receives root object as second argument", () => {
+    registerType({
+        name: "FieldMapperRootHost",
+        fields: [
+            { name: "tag", type: "int" },
+            {
+                name: "value",
+                type: "int",
+                packMapper(value, root) {
+                    assert.ok("tag" in root, "root should be the top-level object");
+                    return value * 2;
+                },
+                unpackMapper(value, containingObj) {
+                    return value / 2;
+                },
+            },
+        ],
+    });
+
+    const { binary } = pack("FieldMapperRootHost", { tag: 1, value: 5 });
+    assert.equal(binary.readInt32LE(4), 10); // 5 * 2
+    const result = unpack("FieldMapperRootHost", binary);
+    assert.equal(result.value, 5);
+});
+
+test("field unpackMapper receives already-unpacked fields in containingObj", () => {
+    registerType({
+        name: "FieldMapperContext",
+        fields: [
+            { name: "multiplier", type: "int" },
+            {
+                name: "value",
+                type: "int",
+                unpackMapper(value, containingObj) {
+                    return value * containingObj.multiplier;
+                },
+            },
+        ],
+    });
+
+    const { binary } = pack("FieldMapperContext", { multiplier: 3, value: 4 });
+    const result = unpack("FieldMapperContext", binary);
+    assert.equal(result.multiplier, 3);
+    assert.equal(result.value, 12); // 4 * 3
+});

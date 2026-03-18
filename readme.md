@@ -88,12 +88,14 @@ Each field definition:
 { name: "fieldName", type: "typeName", default: <value>, cname: "c_name" }
 ```
 
-| Property  | Description |
-|-----------|-------------|
-| `name`    | JavaScript property name used during pack/unpack |
-| `type`    | Type name (see [Primitive Types](#primitive-types) and type modifiers) |
-| `default` | Value used when the property is absent during packing.  Omit to make the field required. |
-| `cname`   | Override the C field name in generated headers |
+| Property        | Description |
+|-----------------|-------------|
+| `name`          | JavaScript property name used during pack/unpack |
+| `type`          | Type name (see [Primitive Types](#primitive-types) and type modifiers) |
+| `default`       | Value used when the property is absent during packing.  Omit to make the field required. |
+| `cname`         | Override the C field name in generated headers |
+| `packMapper`    | `(value, root) => transformed` — transform this field's value before packing (see [Pack and Unpack Mappers](#pack-and-unpack-mappers)) |
+| `unpackMapper`  | `(value, containingObj) => transformed` — transform this field's value after unpacking (see [Pack and Unpack Mappers](#pack-and-unpack-mappers)) |
 
 
 ### Packing and Unpacking
@@ -543,15 +545,20 @@ name twice throws an error.
 
 ### Pack and Unpack Mappers
 
-A registered type can declare `packMapper` and `unpackMapper` functions to
-translate between a convenient user-facing representation and the binary
-representation that is actually packed.
+Mappers translate between a convenient user-facing representation and the
+binary representation that is actually packed.  They can be declared on a
+**registered type** (applies everywhere that type is used) or on an individual
+**field** (applies only to that field).
+
+#### Type-level mappers
+
+Declare `packMapper` and `unpackMapper` on the type definition:
 
 ```js
 registerType({
     name: "TypeName",
     fields: [ ... ],
-    packMapper(value, root)      { /* return transformed value to pack   */ },
+    packMapper(value, root)         { /* return transformed value to pack   */ },
     unpackMapper(value, containing) { /* return transformed value to return */ },
 });
 ```
@@ -561,9 +568,8 @@ registerType({
 | `packMapper` | Before packing a value of this type | `value` — the value to transform; `root` — the top-level object passed to `pack()` |
 | `unpackMapper` | After unpacking a value of this type | `value` — the unpacked value; `containing` — the partially-built parent struct (fields declared before the current field are populated) |
 
-The mapper receives the user-facing value and returns the value that will
-actually be packed (for `packMapper`), or receives the raw unpacked value and
-returns what the caller will see (for `unpackMapper`).
+Type-level mappers apply wherever the type is used — as a direct field, as the
+target of a pointer (`ColourIndex*`), or as an array element (`ColourIndex[]*`).
 
 **Example — colour name ↔ integer index**
 
@@ -615,14 +621,59 @@ registerType({
 });
 ```
 
-Mappers apply wherever the type is used — as a direct field, as the target of
-a pointer (`ColourIndex*`), or as an array element (`ColourIndex[]*`).
+#### Field-level mappers
 
-**Disabling unpack mappers**
+Declare `packMapper` and `unpackMapper` directly on a field definition to
+transform only that specific field, without creating a new named type.  The
+signatures are identical to the type-level versions.
 
-Call `disableUnpackMappers(true)` to skip all `unpackMapper` functions during
-unpacking.  This is a diagnostic tool: it lets you inspect the raw packed
-values without any remapping applied.
+```js
+registerType({
+    name: "Config",
+    fields: [
+        {
+            name: "colour",
+            type: "int",
+            packMapper(value, root) {
+                return COLOURS.indexOf(value);   // store as integer
+            },
+            unpackMapper(value, containingObj) {
+                return COLOURS[value];            // return as string
+            },
+        },
+        { name: "count", type: "int" },
+    ],
+});
+
+pack("Config", { colour: "blue", count: 3 });
+// "blue" is stored as integer 2 in the binary
+
+let result = unpack("Config", binary);
+// result = { colour: "blue", count: 3 }
+```
+
+Field-level `unpackMapper` receives the already-unpacked preceding fields in
+`containingObj`, so the mapper can make context-dependent transformations:
+
+```js
+{
+    name: "value",
+    type: "int",
+    unpackMapper(value, containingObj) {
+        return value * containingObj.multiplier;  // use a sibling field
+    },
+}
+```
+
+Field-level mappers take precedence for their specific field.  If the field's
+type also has a type-level mapper, the type-level mapper runs first (as part of
+packing/unpacking the type), then the field-level mapper is applied on top.
+
+#### Disabling unpack mappers
+
+Call `disableUnpackMappers(true)` to skip **all** `unpackMapper` functions
+(both type-level and field-level) during unpacking.  This is a diagnostic tool:
+it lets you inspect the raw packed values without any remapping applied.
 
 ```js
 import { disableUnpackMappers } from "@toptensoftware/binpack";
