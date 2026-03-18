@@ -102,6 +102,7 @@ async function main() {
             noUnpackMappers = true;
         } else if (args.name === "version" || args.name === "v") {
             showPackageVersion(new URL("./package.json", import.meta.url).pathname.replace(/^\//, ''));
+            process.exit(0);
         } else if (args.name === "help" || args.name === "h") {
             showPackageVersion(new URL("./package.json", import.meta.url).pathname.replace(/^\//, ''));
             console.log("\nUsage: binpack [options] <datafile> [<typefile>]");
