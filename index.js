@@ -406,6 +406,22 @@ export class BinPack
         this.#pointers.push(offset);
     }
 
+    #pathStack = [];
+
+    #formatPath()
+    {
+        let result = '';
+        for (let seg of this.#pathStack)
+            result += seg.startsWith('[') ? seg : (result ? '.' : '') + seg;
+        return result;
+    }
+
+    #pathError(msg)
+    {
+        let path = this.#formatPath();
+        return new Error(path ? `${msg} (at ${path})` : msg);
+    }
+
     #pendingRefs = new Map();
     registerPendingRef(offset, type, value)
     {
@@ -421,10 +437,11 @@ export class BinPack
         }
 
         // Store it
-        this.#pendingRefs.set(value, { 
+        this.#pendingRefs.set(value, {
             type,
-            value, 
-            offsets: [ offset ]
+            value,
+            offsets: [ offset ],
+            path: [...this.#pathStack],
         })
     }
 
@@ -437,9 +454,20 @@ export class BinPack
 
             let dataOffset = this.offset;
 
-            // Pack data
+            // Pack data, restoring path context from when the reference was registered
             if (r.type)
-                this.pack(r.type, r.value);
+            {
+                let savedPath = this.#pathStack;
+                this.#pathStack = r.path ?? [];
+                try
+                {
+                    this.pack(r.type, r.value);
+                }
+                finally
+                {
+                    this.#pathStack = savedPath;
+                }
+            }
 
             // Update all references
             for (let ro of r.offsets)
@@ -479,7 +507,7 @@ export class BinPack
         {
             if (type.fixedLength !== undefined && value.length != type.fixedLength)
             {
-                throw new Error(`Fixed length array mismatch (expected ${type.fixedLength}, got ${value.length})`);
+                throw this.#pathError(`Fixed length array mismatch (expected ${type.fixedLength}, got ${value.length})`);
             }
             // Fast path: Buffer input for byte arrays
             if (Buffer.isBuffer(value) && type.array.name === 'byte')
@@ -489,9 +517,17 @@ export class BinPack
                 this.offset += value.length;
                 return;
             }
-            for (let v of value)
+            for (let [i, v] of value.entries())
             {
-                this.pack(type.array, v);
+                this.#pathStack.push(`[${i}]`);
+                try
+                {
+                    this.pack(type.array, v);
+                }
+                finally
+                {
+                    this.#pathStack.pop();
+                }
             }
             return;
         }
@@ -522,7 +558,7 @@ export class BinPack
                     if (typeof value[key] === 'function') continue;
                     if (knownNames.has(key)) continue;
                     if (ignored.has(key)) continue;
-                    throw new Error(`Unrecognized field '${key}' in type '${type.name}'`);
+                    throw this.#pathError(`Unrecognized field '${key}' in type '${type.name}'`);
                 }
             }
 
@@ -538,11 +574,19 @@ export class BinPack
                     if (f.default !== undefined)
                         v = f.default;
                     else
-                        throw new Error(`Missing required field '${f.name}'`);
+                        throw this.#pathError(`Missing required field '${f.name}'`);
                 }
                 if (f.packMapper)
                     v = f.packMapper(v, this.rootValue);
-                this.pack(f.type, v);
+                this.#pathStack.push(f.name);
+                try
+                {
+                    this.pack(f.type, v);
+                }
+                finally
+                {
+                    this.#pathStack.pop();
+                }
             }
 
             // Update offset to end of struct
