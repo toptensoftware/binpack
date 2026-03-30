@@ -5,6 +5,7 @@ import { pack, unpack, registerEnum, registerType, formatTypes, enable64BitMode,
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import { register } from "node:module";
 
 // Combined file signatures as uint32 LE
 const SIGNATURE     = 0x4B415042;   // "BPAK" - 32-bit mode
@@ -22,6 +23,15 @@ export async function loadFile(filePath) {
     } else {
         throw new Error(`Unsupported file extension: ${ext} (expected .js or .json)`);
     }
+}
+
+function resolveTypeFilePath(typeFile) {
+    if (!typeFile) {
+        if (fs.existsSync("binpack.js")) return "binpack.js";
+        if (fs.existsSync("binpack.json")) return "binpack.json";
+        return null;
+    }
+    return typeFile;
 }
 
 async function loadTypeDefs(typeFile) {
@@ -256,6 +266,13 @@ export function buildCombinedBuffer(packResult, opts = {}) {
 }
 
 async function doPack(dataFile, typeFile, outFile, use64bit, raw, strip, base, headerFile) {
+    const resolvedTypeFile = resolveTypeFilePath(typeFile);
+    if (resolvedTypeFile) {
+        register(new URL('./binpack-loader.js', import.meta.url), {
+            data: { typeFileUrl: pathToFileURL(path.resolve(resolvedTypeFile)).href }
+        });
+    }
+
     const typeDefs = await loadTypeDefs(typeFile);
     const rootType = typeDefs.filter(x => !!x.fields)[0].name;
     const data     = await loadFile(dataFile);
