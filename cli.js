@@ -4,7 +4,7 @@ import { clargs, showArgs, showPackageVersion } from "@toptensoftware/clargs";
 import { pack, unpack, registerEnum, registerType, formatTypes, enable64BitMode, disableUnpackMappers } from "./index.js";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 
 // Combined file signatures as uint32 LE
 const SIGNATURE     = 0x4B415042;   // "BPAK" - 32-bit mode
@@ -12,7 +12,7 @@ const SIGNATURE_64  = 0x34365042;   // "BP64" - 64-bit mode
 const VERSION       = 1;
 const HEADER_SIZE   = 32;
 
-async function loadFile(filePath) {
+export async function loadFile(filePath) {
     const ext = path.extname(filePath).toLowerCase();
     if (ext === ".js") {
         const mod = await import(pathToFileURL(path.resolve(filePath)).href);
@@ -180,6 +180,81 @@ async function main() {
     await doPack(inputFile, typeFile, outFile, use64bit, raw, strip, base, headerFile);
 }
 
+/**
+ * Assembles a pack() result into the combined binary file format (header + data + reloc table).
+ *
+ * @param {{ binary: Buffer, relocations: number[] }} packResult - Result from pack().
+ * @param {{ use64bit?: boolean, strip?: boolean, base?: bigint|null }} [opts]
+ * @returns {Buffer}
+ */
+export function buildCombinedBuffer(packResult, opts = {}) {
+    const { use64bit = false, strip = false, base = null } = opts;
+    const { binary, relocations } = packResult;
+
+    // Combined file layout:
+    //   [0..3]   signature (BPAK or BP64)
+    //   [4..7]   version
+    //   [8..11]  relocation count
+    //   [12..15] relocation table offset (from start of file)
+    //   [16..23] relocated pointer to start of data (base + HEADER_SIZE); 0 if not relocated
+    //            in 64-bit mode occupies all 8 bytes; in 32-bit mode only 4 bytes
+    //   [24..31] reserved (zero)
+    //   [32..]   packed data (pointers adjusted by HEADER_SIZE, and optionally base)
+    //   [reloc..] relocation table (uint32 file-relative offsets)
+
+    const relocTableOffset = strip ? 0 : HEADER_SIZE + binary.length;
+    const count = strip ? 0 : relocations.length;
+    const combined = Buffer.alloc(HEADER_SIZE + binary.length + count * 4);
+
+    // Write header
+    combined.writeUInt32LE(use64bit ? SIGNATURE_64 : SIGNATURE, 0);
+    combined.writeUInt32LE(VERSION, 4);
+    combined.writeUInt32LE(count, 8);
+    combined.writeUInt32LE(relocTableOffset, 12);
+    // bytes 16-31: zero (data pointer + reserved); filled below if base is set
+
+    // Copy packed data
+    binary.copy(combined, HEADER_SIZE);
+
+    // Adjust all pointers: always add HEADER_SIZE, plus base if specified.
+    // Both are combined into a single delta so each pointer is written once.
+    const delta = BigInt(HEADER_SIZE) + (base ?? 0n);
+
+    for (let i = 0; i < relocations.length; i++) {
+        const origOffset = relocations[i];
+        const fileOffset = origOffset + HEADER_SIZE;
+
+        // Always adjust pointer values (HEADER_SIZE + optional base)
+        if (use64bit) {
+            const lo = combined.readUInt32LE(fileOffset);
+            const hi = combined.readUInt32LE(fileOffset + 4);
+            const ptr = BigInt(lo) | (BigInt(hi) << 32n);
+            const relocated = ptr + delta;
+            combined.writeUInt32LE(Number(relocated & 0xFFFFFFFFn), fileOffset);
+            combined.writeUInt32LE(Number((relocated >> 32n) & 0xFFFFFFFFn), fileOffset + 4);
+        } else {
+            const ptr = BigInt(combined.readUInt32LE(fileOffset));
+            combined.writeUInt32LE(Number((ptr + delta) & 0xFFFFFFFFn), fileOffset);
+        }
+
+        // Only record reloc table entry when not stripping
+        if (!strip) {
+            combined.writeUInt32LE(fileOffset, relocTableOffset + i * 4);
+        }
+    }
+
+    // Store relocated pointer to start of data at header offset 0x10
+    if (base !== null) {
+        const dataPtr = base + BigInt(HEADER_SIZE);
+        combined.writeUInt32LE(Number(dataPtr & 0xFFFFFFFFn), 0x10);
+        if (use64bit) {
+            combined.writeUInt32LE(Number((dataPtr >> 32n) & 0xFFFFFFFFn), 0x14);
+        }
+    }
+
+    return combined;
+}
+
 async function doPack(dataFile, typeFile, outFile, use64bit, raw, strip, base, headerFile) {
     const typeDefs = await loadTypeDefs(typeFile);
     const rootType = typeDefs.filter(x => !!x.fields)[0].name;
@@ -200,67 +275,8 @@ async function doPack(dataFile, typeFile, outFile, use64bit, raw, strip, base, h
     const binFile = outFile ?? (baseName + ".bin");
 
     if (!raw) {
-        // Combined file layout:
-        //   [0..3]   signature (BPAK or BP64)
-        //   [4..7]   version
-        //   [8..11]  relocation count
-        //   [12..15] relocation table offset (from start of file)
-        //   [16..23] relocated pointer to start of data (base + HEADER_SIZE); 0 if not relocated
-        //            in 64-bit mode occupies all 8 bytes; in 32-bit mode only 4 bytes
-        //   [24..31] reserved (zero)
-        //   [32..]   packed data (pointers adjusted by HEADER_SIZE, and optionally base)
-        //   [reloc..] relocation table (uint32 file-relative offsets)
-
-        const relocTableOffset = strip ? 0 : HEADER_SIZE + result.binary.length;
+        const combined = buildCombinedBuffer(result, { use64bit, strip, base });
         const count = strip ? 0 : result.relocations.length;
-        const combined = Buffer.alloc(HEADER_SIZE + result.binary.length + count * 4);
-
-        // Write header
-        combined.writeUInt32LE(use64bit ? SIGNATURE_64 : SIGNATURE, 0);
-        combined.writeUInt32LE(VERSION, 4);
-        combined.writeUInt32LE(count, 8);
-        combined.writeUInt32LE(relocTableOffset, 12);
-        // bytes 16-31: zero (data pointer + reserved); filled below if base is set
-
-        // Copy packed data
-        result.binary.copy(combined, HEADER_SIZE);
-
-        // Adjust all pointers: always add HEADER_SIZE, plus base if specified.
-        // Both are combined into a single delta so each pointer is written once.
-        const delta = BigInt(HEADER_SIZE) + (base ?? 0n);
-
-        for (let i = 0; i < result.relocations.length; i++) {
-            const origOffset = result.relocations[i];
-            const fileOffset = origOffset + HEADER_SIZE;
-
-            // Always adjust pointer values (HEADER_SIZE + optional base)
-            if (use64bit) {
-                const lo = combined.readUInt32LE(fileOffset);
-                const hi = combined.readUInt32LE(fileOffset + 4);
-                const ptr = BigInt(lo) | (BigInt(hi) << 32n);
-                const relocated = ptr + delta;
-                combined.writeUInt32LE(Number(relocated & 0xFFFFFFFFn), fileOffset);
-                combined.writeUInt32LE(Number((relocated >> 32n) & 0xFFFFFFFFn), fileOffset + 4);
-            } else {
-                const ptr = BigInt(combined.readUInt32LE(fileOffset));
-                combined.writeUInt32LE(Number((ptr + delta) & 0xFFFFFFFFn), fileOffset);
-            }
-
-            // Only record reloc table entry when not stripping
-            if (!strip) {
-                combined.writeUInt32LE(fileOffset, relocTableOffset + i * 4);
-            }
-        }
-
-        // Store relocated pointer to start of data at header offset 0x10
-        if (base !== null) {
-            const dataPtr = base + BigInt(HEADER_SIZE);
-            combined.writeUInt32LE(Number(dataPtr & 0xFFFFFFFFn), 0x10);
-            if (use64bit) {
-                combined.writeUInt32LE(Number((dataPtr >> 32n) & 0xFFFFFFFFn), 0x14);
-            }
-        }
-
         fs.writeFileSync(binFile, combined);
         console.log(`Written: ${binFile} (${combined.length} bytes, ${count} relocations)`);
     } else {
@@ -378,7 +394,9 @@ async function doUnpack(binFile, typeFile, outFile, raw, base, use64bit, noUnpac
     }
 }
 
-main().catch(err => {
-    console.error(`Error: ${err.message}`);
-    process.exit(1);
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+    main().catch(err => {
+        console.error(`Error: ${err.message}`);
+        process.exit(1);
+    });
+}
