@@ -105,7 +105,6 @@ class Buf extends Uint8Array {
     readBigInt64LE(offset)  { return this._view.getBigInt64(offset, true); }
 
     readFloatLE(offset)     { return this._view.getFloat32(offset, true); }
-    readUFloatLE(offset)    { return this._view.getFloat32(offset, true); } // typo alias (index.js:80)
     readDoubleLE(offset)    { return this._view.getFloat64(offset, true); }
 
     // -------------------------------------------------------------------------

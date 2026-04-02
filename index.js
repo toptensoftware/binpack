@@ -77,7 +77,7 @@ let buildInTypes =
         cname: "float",
         length: 4,
         pack: (ctx, v) => ctx.buf.writeFloatLE(v, ctx.offset),
-        unpack: (ctx) => ctx.buf.readUFloatLE(ctx.offset),
+        unpack: (ctx) => ctx.buf.readFloatLE(ctx.offset),
     },
     {
         name: "double",
