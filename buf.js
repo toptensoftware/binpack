@@ -125,4 +125,7 @@ class Buf extends Uint8Array {
     writeDoubleLE(value, offset)    { this._view.setFloat64(offset, value, true); }
 }
 
-export { Buf as Buffer };
+// Use the native Buffer in Node.js; fall back to the shim in a browser.
+const Buffer = globalThis.Buffer ?? Buf;
+
+export { Buffer };

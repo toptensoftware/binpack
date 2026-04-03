@@ -1,4 +1,6 @@
-let buildInTypes = 
+import { Buffer } from './buf.js';
+
+let buildInTypes =
 [
     {
         name: "length",
