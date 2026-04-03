@@ -1,4 +1,6 @@
-let buildInTypes = 
+import { Buffer } from './buf.js';
+
+let buildInTypes =
 [
     {
         name: "length",
@@ -77,7 +79,7 @@ let buildInTypes =
         cname: "float",
         length: 4,
         pack: (ctx, v) => ctx.buf.writeFloatLE(v, ctx.offset),
-        unpack: (ctx) => ctx.buf.readUFloatLE(ctx.offset),
+        unpack: (ctx) => ctx.buf.readFloatLE(ctx.offset),
     },
     {
         name: "double",
