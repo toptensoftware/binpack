@@ -66,7 +66,8 @@ class Buf extends Uint8Array {
     // -------------------------------------------------------------------------
 
     copy(target, targetStart = 0) {
-        target.set(this, targetStart);
+        const length = Math.min(this.length, target.length - targetStart);
+        target.set(this.subarray(0, length), targetStart);
     }
 
     // Returns a Buf *view* (no copy) into the same backing ArrayBuffer,
