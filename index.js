@@ -802,8 +802,19 @@ export function unpack(type, buf, offset = 0)
     }
 }
 
-export function formatTypes()
+export function formatTypes(filter)
 {
+    // No filter?  Include everything
+    if (!filter)
+        filter = (n) => true;
+
+    // Filter is an array or allowed names?
+    if (Array.isArray(filter))
+    {
+        let typeNames = filter;
+        filter = (name) => typeNames.indexOf(name) >= 0;
+    }
+
     let buf = "#pragma once\n\n";
     buf += `#include <stdint.h>\n\n`;
 
@@ -815,6 +826,9 @@ export function formatTypes()
     {
         for (let [name, values] of enumMap)
         {
+            if (!filter(name))
+                continue;
+
             const prefix = name.toUpperCase();
             buf += `// ${name}\n`;
             for (let [key, value] of Object.entries(values))
@@ -831,6 +845,9 @@ export function formatTypes()
         if (!t.fields)
             continue;
 
+        if (!filter(t.name))
+            continue;
+
         // Ensure the type is fully laid out (may not have been packed yet)
         findType(t);
 
@@ -839,13 +856,17 @@ export function formatTypes()
 
     buf += `\n\n`;
 
+    buf += "#pragma pack(push, 1)\n\n"
     for (let t of typeMap.values())
     {
         if (!t.fields)
             continue;
 
+        if (!filter(t.name))
+            continue;
+
         buf += `// ${t.name}\n`;
-        buf += `struct __attribute__((packed)) ${t.name}\n`;
+        buf += `struct ${t.name}\n`;
         buf += `{\n`
 
         let o = 0;
@@ -896,6 +917,9 @@ export function formatTypes()
 
         buf += `static_assert(sizeof(${t.name}) == ${t.length}, "Size of ${t.name} must be ${t.length} bytes");\n\n`;   
     }
+
+    buf += "#pragma pack(pop)\n\n"
+    
 
     buf += `#ifdef __cplusplus\n`;
     buf += `}\n`;
