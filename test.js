@@ -1079,3 +1079,44 @@ test("sharing one object between genuinely different types is still an error", (
     const obj = { x: 1 };
     assert.throws(() => pack("ShareMixed", { a: obj, b: obj }), /different types/);
 });
+
+test("an object referenced again from a nested reference, after it was already packed", () => {
+    // Outer.leaf is packed first; Outer.mid (packed later) points at the same leaf.
+    // The second pointer used to stay null because the first reference was already done.
+    registerType({ name: "LateLeaf", fields: [{ name: "n", type: "int" }] });
+    registerType({ name: "LateMid", fields: [{ name: "leaf", type: "LateLeaf*" }, { name: "buf", type: "length" }, { name: "buf", type: "byte*", default: null }] });
+    registerType({ name: "LateOuter", fields: [{ name: "leaf", type: "LateLeaf*" }, { name: "mid", type: "LateMid*" }] });
+    const leaf = { n: 42 };
+    const shared = Buffer.from("LATE-SHARED-BUFFER");
+    const { binary, relocations } = pack("LateOuter", { leaf, mid: { leaf, buf: shared } });
+
+    const result = unpack("LateOuter", binary);
+    assert.equal(result.leaf.n, 42);
+    assert.equal(result.mid.leaf.n, 42);
+    assert.deepEqual(Buffer.from(result.mid.buf), shared);
+
+    // One copy of the leaf: both pointers hold the same offset, and both are relocated
+    const leafAt = binary.readUInt32LE(0);
+    const midAt = binary.readUInt32LE(4);
+    assert.equal(binary.readUInt32LE(midAt), leafAt);
+    assert.ok(relocations.includes(midAt), "the nested pointer is in the relocation table");
+});
+
+test("a Buffer shared by an early field and a nested reference is stored once", () => {
+    registerType({ name: "LateBufMid", fields: [{ name: "buf", type: "length" }, { name: "buf", type: "byte*", default: null }] });
+    registerType({
+        name: "LateBufOuter",
+        fields: [{ name: "buf", type: "length" }, { name: "buf", type: "byte*", default: null }, { name: "mid", type: "LateBufMid*" }],
+    });
+    const shared = Buffer.from("LATE-BUF-0123456");
+    const { binary, relocations } = pack("LateBufOuter", { buf: shared, mid: { buf: shared } });
+    let count = 0, from = 0;
+    while ((from = binary.indexOf("LATE-BUF-0123456", from)) >= 0) { count++; from++; }
+    assert.equal(count, 1);
+    const result = unpack("LateBufOuter", binary);
+    assert.deepEqual(Buffer.from(result.buf), shared);
+    assert.deepEqual(Buffer.from(result.mid.buf), shared);
+    const midAt = binary.readUInt32LE(8);
+    assert.notEqual(binary.readUInt32LE(midAt + 4), 0);
+    assert.ok(relocations.includes(midAt + 4));
+});

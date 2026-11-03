@@ -447,6 +447,16 @@ export class BinPack
             if (!sameType(type, prev.type))
                 throw new Error("Pending reference to same object with different types");
 
+            // Already placed (the pass over the pending refs got to it first,
+            // e.g. a shared leaf reached again from a later nested reference):
+            // point at it now, since no later pass will
+            if (prev.dataOffset !== undefined)
+            {
+                writePointer(this.buf, prev.dataOffset, offset);
+                this.registerPointer(offset);
+                return;
+            }
+
             prev.offsets.push(offset);
             return;
         }
@@ -468,6 +478,7 @@ export class BinPack
             this.offset = align(this.offset, 4);
 
             let dataOffset = this.offset;
+            r.dataOffset = dataOffset;
 
             // Pack data, restoring path context from when the reference was registered
             if (r.type)
