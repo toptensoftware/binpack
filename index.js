@@ -203,6 +203,19 @@ function align(value, align)
     return value;
 }
 
+// Two type descriptors are the same type if they are the same object or wrap the same thing:
+// each field gets its own array/reference wrapper objects, so compare what they wrap.
+function sameType(a, b)
+{
+    if (a === b)
+        return true;
+    if (a?.array && b?.array)
+        return a.fixedLength === b.fixedLength && sameType(a.array, b.array);
+    if (a?.reference && b?.reference)
+        return sameType(a.reference, b.reference);
+    return false;
+}
+
 // Find a type definition
 export function findType(type)
 {
@@ -431,7 +444,7 @@ export class BinPack
         let prev = this.#pendingRefs.get(value);
         if (prev)
         {
-            if (type != prev.type)
+            if (!sameType(type, prev.type))
                 throw new Error("Pending reference to same object with different types");
 
             prev.offsets.push(offset);
@@ -608,10 +621,12 @@ export class BinPack
         this.packPendingRefs();
 
         // Work out final layout
-        let blobBaseOffset = this.offset;
+        // The blob area starts 4-aligned and the total is padded to a multiple of 4,
+        // so anything appended after the packed data (eg a relocation table) is aligned.
+        let blobBaseOffset = align(this.offset, 4);
         let blobLength = this.#nextBlobOffset;
 
-        var totalSize = blobBaseOffset + blobLength;
+        var totalSize = align(blobBaseOffset + blobLength, 4);
 
         // Allocate buffer
         let buf = Buffer.alloc(totalSize);

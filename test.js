@@ -1020,3 +1020,62 @@ test("field unpackMapper receives already-unpacked fields in containingObj", () 
     assert.equal(result.multiplier, 3);
     assert.equal(result.value, 12); // 4 * 3
 });
+
+// ---------------------------------------------------------------------------
+// Output padding
+// ---------------------------------------------------------------------------
+
+test("pack() output length is a multiple of 4 and the blob area starts 4-aligned", () => {
+    registerType({
+        name: "PadTest",
+        fields: [
+            { name: "s", type: "string" },
+            { name: "data", type: "length" },
+            { name: "data", type: "byte*" },
+        ],
+    });
+
+    // Odd-sized string and byte array so any missing padding shows
+    for (const [s, n] of [["ab", 5], ["a", 1], ["abcdefg", 7], ["", 3]])
+    {
+        const data = Buffer.alloc(n, 0x77);
+        const { binary } = pack("PadTest", { s, data });
+        assert.equal(binary.length % 4, 0, `length ${binary.length} for s="${s}" n=${n}`);
+        const result = unpack("PadTest", binary);
+        assert.equal(result.s, s);
+        assert.deepEqual(Buffer.from(result.data), data);
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Sharing one object between different fields
+// ---------------------------------------------------------------------------
+
+test("one Buffer object shared by two different fields is stored once", () => {
+    registerType({
+        name: "ShareTwoFields",
+        fields: [
+            { name: "a", type: "length" }, { name: "a", type: "byte*", default: null },
+            { name: "b", type: "length" }, { name: "b", type: "byte*", default: null },
+        ],
+    });
+    const shared = Buffer.from("SHARED-CONTENT-77");
+    const { binary } = pack("ShareTwoFields", { a: shared, b: shared });
+    let count = 0, from = 0;
+    while ((from = binary.indexOf("SHARED-CONTENT-77", from)) >= 0) { count++; from++; }
+    assert.equal(count, 1);
+    const result = unpack("ShareTwoFields", binary);
+    assert.deepEqual(Buffer.from(result.a), shared);
+    assert.deepEqual(Buffer.from(result.b), shared);
+});
+
+test("sharing one object between genuinely different types is still an error", () => {
+    registerType({ name: "ShareA", fields: [{ name: "x", type: "int" }] });
+    registerType({ name: "ShareB", fields: [{ name: "x", type: "int" }] });
+    registerType({
+        name: "ShareMixed",
+        fields: [{ name: "a", type: "ShareA*" }, { name: "b", type: "ShareB*" }],
+    });
+    const obj = { x: 1 };
+    assert.throws(() => pack("ShareMixed", { a: obj, b: obj }), /different types/);
+});
